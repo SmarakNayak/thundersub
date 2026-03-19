@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ThunderSub</title>
+<link rel="stylesheet" href="tab.css">
+</head>
+<body>
+
+<div id="sidebar">
+  <div class="sidebar-title"><span>📬</span>ThunderSub</div>
+
+  <div class="stats-section">
+    <h3>Overview</h3>
+    <div class="stat-row"><span class="stat-label">Total senders</span><span class="stat-val" id="stat-total">—</span></div>
+    <div class="stat-row"><span class="stat-label">Pending</span><span class="stat-val" id="stat-pending">—</span></div>
+    <div class="stat-row"><span class="stat-label">Kept</span><span class="stat-val" id="stat-kept">—</span></div>
+    <div class="stat-row"><span class="stat-label">Unsubscribed</span><span class="stat-val" id="stat-unsub">—</span></div>
+  </div>
+
+  <div class="scan-section">
+    <h3>Scanner</h3>
+    <button id="scan-btn">Scan Emails</button>
+    <div class="progress-wrap" id="progress-wrap">
+      <div class="progress-bar-outer"><div class="progress-bar-inner" id="progress-bar"></div></div>
+      <div id="scan-msg">Starting...</div>
+    </div>
+  </div>
+
+  <div class="filters-section">
+    <h3>Filter</h3>
+    <button class="filter-tab active" data-filter="all">
+      All <span class="filter-badge" id="fb-all">0</span>
+    </button>
+    <button class="filter-tab" data-filter="pending">
+      Pending <span class="filter-badge" id="fb-pending">0</span>
+    </button>
+    <button class="filter-tab" data-filter="keep">
+      Kept <span class="filter-badge" id="fb-keep">0</span>
+    </button>
+    <button class="filter-tab" data-filter="unsubscribed">
+      Unsubscribed <span class="filter-badge" id="fb-unsubscribed">0</span>
+    </button>
+  </div>
+</div>
+
+<div id="main">
+  <div id="main-header">
+    <h2 id="main-title">All Subscriptions</h2>
+    <span id="card-count"></span>
+  </div>
+  <div id="cards-grid">
+    <div id="loading"><div class="spinner"></div>Loading...</div>
+  </div>
+  <div id="empty-state">
+    <div class="icon">📭</div>
+    <h3>No subscriptions found</h3>
+    <p>Run a scan to discover email subscriptions.</p>
+  </div>
+</div>
+
+<div id="toast-container"></div>
+
+<script src="tab.js"></script>
+</body>
+</html>

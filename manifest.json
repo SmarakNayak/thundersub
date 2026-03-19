@@ -1,0 +1,37 @@
+{
+  "manifest_version": 2,
+  "name": "ThunderSub",
+  "description": "Manage email subscriptions in Thunderbird — scan, unsubscribe, and clean up.",
+  "version": "2.0",
+  "author": "SmarakNayak",
+  "browser_specific_settings": {
+    "gecko": {
+      "id": "thundersub@smaraknayak",
+      "strict_min_version": "128.0"
+    }
+  },
+  "icons": {
+    "64": "icons/icon-64.svg",
+    "32": "icons/icon-32.svg",
+    "16": "icons/icon-16.svg"
+  },
+  "browser_action": {
+    "default_title": "ThunderSub",
+    "default_icon": "icons/icon-64.svg",
+    "default_popup": "popup/popup.html"
+  },
+  "background": {
+    "scripts": ["background.js"]
+  },
+  "permissions": [
+    "messagesRead",
+    "messagesMove",
+    "messagesDelete",
+    "accountsRead",
+    "accountsFolders",
+    "compose",
+    "compose.send",
+    "storage",
+    "<all_urls>"
+  ]
+}
