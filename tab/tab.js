@@ -221,7 +221,7 @@ function openUnsubModal(senderEmail, recipientAddress) {
     <span class="modal-method">${esc(methodLabel)}</span>
   </div>`;
 
-  // Source folder checkboxes
+  // Build source folder checkboxes (hidden until delete/move selected)
   const groups = sub.messageGroups || [];
   const foldersSection = document.getElementById('modal-folders-section');
   const foldersEl = document.getElementById('modal-folders');
@@ -232,10 +232,9 @@ function openUnsubModal(senderEmail, recipientAddress) {
         <span class="modal-folder-name">${esc(g.accountName)} / ${esc(g.folderName)}</span>
         <span class="modal-folder-count">${g.messageIds.length}</span>
       </label>`).join('');
-    foldersSection.style.display = 'block';
-  } else {
-    foldersSection.style.display = 'none';
   }
+  // Default is delete, so show folder checkboxes if there are groups
+  foldersSection.style.display = groups.length > 0 ? 'block' : 'none';
 
   // Reset dispose & hide destination tree
   document.querySelector('input[name="dispose"][value="delete"]').checked = true;
@@ -255,10 +254,19 @@ function closeUnsubModal() {
   modalRecipientAddress = null;
 }
 
-// Show/hide destination tree when dispose option changes
+// Show/hide folders section and destination tree when dispose option changes
 async function onDisposeChange() {
   const dispose = document.querySelector('input[name="dispose"]:checked').value;
+  const foldersSection = document.getElementById('modal-folders-section');
   const destWrap = document.getElementById('modal-dest-wrap');
+  const hasGroups = document.querySelectorAll('.modal-folder-check').length > 0;
+
+  // Show source folder checkboxes for delete or move
+  const showFolders = (dispose === 'delete' || dispose === 'move') && hasGroups;
+  foldersSection.style.display = showFolders ? 'block' : 'none';
+  if (showFolders) {
+    document.getElementById('modal-folders-title').textContent = 'From folders';
+  }
 
   if (dispose === 'move') {
     destWrap.style.display = 'block';
@@ -274,7 +282,11 @@ async function onDisposeChange() {
         return;
       }
     }
-    renderFolderTree(folderTreeCache);
+    // Filter tree to only accounts relevant to this subscription
+    const sub = subsCache.find(s => s.senderEmail === modalSenderEmail && s.recipientAddress === modalRecipientAddress);
+    const relevantAccounts = new Set((sub?.messageGroups || []).map(g => g.accountName));
+    const filtered = folderTreeCache.filter(a => relevantAccounts.has(a.accountName));
+    renderFolderTree(filtered);
   } else {
     destWrap.style.display = 'none';
   }

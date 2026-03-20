@@ -163,6 +163,7 @@ async function collectAllFolders(account) {
   async function walk(folders) {
     for (const folder of folders) {
       if (folder.type === 'junk' || folder.type === 'trash') continue;
+      if (folder.name === 'All Mail' || folder.name === '[Gmail]/All Mail') continue;
       results.push(folder);
       try {
         const subFolders = await browser.folders.getSubFolders(folder, false);
@@ -287,7 +288,8 @@ async function runScan() {
 
               if (!subs[key]) {
                 subs[key] = {
-                  senderName: name,
+                  senderName: '',
+                  senderNames: {},
                   senderEmail: email,
                   recipientAddress,
                   emailCount: 0,
@@ -304,12 +306,14 @@ async function runScan() {
 
               const s = subs[key];
               s.emailCount++;
+              if (name) {
+                s.senderNames[name] = (s.senderNames[name] || 0) + 1;
+              }
               const dateStr = m.date ? new Date(m.date).toISOString() : '';
               if (dateStr && (!s.lastDate || dateStr > s.lastDate)) {
                 s.lastDate = dateStr;
                 s.sampleSubject = m.subject || '';
               }
-              if (name && !s.senderName) s.senderName = name;
 
               // Merge unsub data at top level
               for (const u of urls) {
@@ -337,6 +341,21 @@ async function runScan() {
       } catch (e) {
         console.warn(`Failed to scan folder ${folder.name}:`, e);
       }
+    }
+
+    // Resolve most frequent sender name per subscription
+    for (const s of Object.values(subs)) {
+      const names = s.senderNames;
+      let best = '', bestCount = 0;
+      for (const [n, c] of Object.entries(names)) {
+        if (c > bestCount) { best = n; bestCount = c; }
+      }
+      s.senderName = best;
+      if (Object.keys(names).length > 1) {
+        console.log(`[NAME] ${s.senderEmail} → picked "${best}" (${bestCount}) from:`, names);
+      }
+      s._nameFreqs = names;
+      delete s.senderNames;
     }
 
     // Merge with existing stored subscriptions (preserve decisions)
@@ -372,6 +391,7 @@ async function runScan() {
         hasHttp: s.hasHttp,
         hasEmbedded: !!s.embeddedUrl,
         embeddedUrl: s.embeddedUrl,
+        _nameFreqs: s._nameFreqs,
         messageGroups: cappedGroups,
         decision: (prev && (prev.decision === 'keep' || prev.decision === 'unsubscribed'))
           ? prev.decision : 'pending',

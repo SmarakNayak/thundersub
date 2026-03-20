@@ -75,22 +75,22 @@
     <h3 id="modal-title">Unsubscribe</h3>
     <div id="modal-addresses"></div>
 
-    <div id="modal-folders-section" style="display:none">
-      <h4>Select folders</h4>
-      <div id="modal-folders"></div>
-    </div>
-
     <div class="modal-dispose">
       <h4>What to do with existing emails?</h4>
       <div class="modal-dispose-options">
         <label class="dispose-option"><input type="radio" name="dispose" value="delete" checked><span>Delete</span></label>
-        <label class="dispose-option"><input type="radio" name="dispose" value="move"><span>Move to folder</span></label>
+        <label class="dispose-option"><input type="radio" name="dispose" value="move"><span>Move</span></label>
         <label class="dispose-option"><input type="radio" name="dispose" value="keep"><span>Keep</span></label>
       </div>
     </div>
 
+    <div id="modal-folders-section" style="display:none">
+      <h4 id="modal-folders-title">From folders</h4>
+      <div id="modal-folders"></div>
+    </div>
+
     <div id="modal-dest-wrap" style="display:none">
-      <h4>Destination</h4>
+      <h4>Destination folder</h4>
       <div id="modal-dest-tree" class="folder-tree"></div>
       <div class="create-folder-row">
         <button class="btn btn-sm btn-outline" id="modal-new-folder-btn">+ New Folder</button>
