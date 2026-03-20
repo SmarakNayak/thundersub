@@ -13,7 +13,7 @@
 
   <div class="stats-section">
     <h3>Overview</h3>
-    <div class="stat-row"><span class="stat-label">Total senders</span><span class="stat-val" id="stat-total">—</span></div>
+    <div class="stat-row"><span class="stat-label">Total subscriptions</span><span class="stat-val" id="stat-total">—</span></div>
     <div class="stat-row"><span class="stat-label">Pending</span><span class="stat-val" id="stat-pending">—</span></div>
     <div class="stat-row"><span class="stat-label">Kept</span><span class="stat-val" id="stat-kept">—</span></div>
     <div class="stat-row"><span class="stat-label">Unsubscribed</span><span class="stat-val" id="stat-unsub">—</span></div>
@@ -22,6 +22,10 @@
   <div class="scan-section">
     <h3>Scanner</h3>
     <button id="scan-btn">Scan Emails</button>
+    <div class="scan-controls" id="scan-controls">
+      <button id="pause-btn">Pause</button>
+      <button id="stop-btn">Stop</button>
+    </div>
     <div class="progress-wrap" id="progress-wrap">
       <div class="progress-bar-outer"><div class="progress-bar-inner" id="progress-bar"></div></div>
       <div id="scan-msg">Starting...</div>

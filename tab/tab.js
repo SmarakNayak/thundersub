@@ -79,7 +79,7 @@ async function loadSubs(filter) {
 function renderCards(subs) {
   const grid = document.getElementById('cards-grid');
   const empty = document.getElementById('empty-state');
-  document.getElementById('card-count').textContent = subs.length + ' senders';
+  document.getElementById('card-count').textContent = subs.length + ' subscriptions';
 
   if (!subs.length) {
     grid.innerHTML = '';
@@ -581,7 +581,7 @@ async function doKeep(senderEmail) {
 
 function updateCardCount() {
   const cards = document.querySelectorAll('.card');
-  document.getElementById('card-count').textContent = cards.length + ' senders';
+  document.getElementById('card-count').textContent = cards.length + ' subscriptions';
 }
 
 // ── Filter ───────────────────────────────────────────────────────────────────
@@ -603,6 +603,7 @@ async function startScan() {
   document.getElementById('progress-wrap').style.display = 'block';
   document.getElementById('scan-msg').textContent = 'Starting...';
   document.getElementById('progress-bar').style.width = '0';
+  document.getElementById('scan-controls').style.display = 'flex';
 
   try {
     await bg('scan');
@@ -611,6 +612,7 @@ async function startScan() {
     toast('Failed to start scan: ' + e.message, 'error');
     btn.disabled = false;
     btn.textContent = 'Scan Emails';
+    document.getElementById('scan-controls').style.display = 'none';
   }
 }
 
@@ -621,8 +623,10 @@ function pollScanStatus() {
       const s = await bg('getScanStatus');
       const pct = s.total > 0 ? Math.round(s.progress / s.total * 100) : 0;
       document.getElementById('progress-bar').style.width = pct + '%';
-      const stats = `${(s.messagesScanned || 0).toLocaleString()} emails scanned, ${s.sendersFound || 0} senders found`;
-      document.getElementById('scan-msg').textContent = `${s.message || ''}\n${stats}`;
+      const stats = `${(s.messagesScanned || 0).toLocaleString()} emails scanned, ${s.sendersFound || 0} subscriptions found`;
+      const pauseNote = s.paused ? ' (paused)' : '';
+      document.getElementById('scan-msg').textContent = `${s.message || ''}${pauseNote}\n${stats}`;
+      document.getElementById('pause-btn').textContent = s.paused ? 'Resume' : 'Pause';
 
       if (s.status === 'done' || s.done) {
         clearInterval(scanPollTimer);
@@ -630,6 +634,10 @@ function pollScanStatus() {
         document.getElementById('scan-btn').disabled = false;
         document.getElementById('scan-btn').textContent = 'Scan Emails';
         document.getElementById('progress-bar').style.width = '100%';
+        document.getElementById('scan-controls').style.display = 'none';
+        document.getElementById('pause-btn').textContent = 'Pause';
+        document.getElementById('stop-btn').disabled = false;
+        document.getElementById('stop-btn').textContent = 'Stop';
         loadStats();
         loadSubs(currentFilter);
         toast('Scan complete! ' + (s.message || ''), 'success');
@@ -642,6 +650,18 @@ function pollScanStatus() {
 document.addEventListener('DOMContentLoaded', async () => {
   document.getElementById('scan-btn').addEventListener('click', startScan);
 
+  document.getElementById('pause-btn').addEventListener('click', async () => {
+    const r = await bg('pauseScan');
+    document.getElementById('pause-btn').textContent = r.paused ? 'Resume' : 'Pause';
+  });
+
+  document.getElementById('stop-btn').addEventListener('click', async () => {
+    if (!confirm('Stop the scan? Progress so far will be saved.')) return;
+    document.getElementById('stop-btn').disabled = true;
+    document.getElementById('stop-btn').textContent = 'Stopping...';
+    await bg('stopScan');
+  });
+
   document.querySelectorAll('.filter-tab').forEach(tab => {
     tab.addEventListener('click', () => setFilter(tab.dataset.filter, tab));
   });
@@ -653,8 +673,10 @@ document.addEventListener('DOMContentLoaded', async () => {
     const s = await bg('getScanStatus');
     if (s.status === 'scanning') {
       document.getElementById('progress-wrap').style.display = 'block';
+      document.getElementById('scan-controls').style.display = 'flex';
       document.getElementById('scan-btn').disabled = true;
       document.getElementById('scan-btn').textContent = 'Scanning...';
+      document.getElementById('pause-btn').textContent = s.paused ? 'Resume' : 'Pause';
       pollScanStatus();
     }
   } catch (e) { /* ignore */ }

@@ -11,7 +11,9 @@ let scanState = {
   messagesScanned: 0,
   sendersFound: 0,
   message: '',
-  done: false
+  done: false,
+  paused: false,
+  stopped: false
 };
 
 // ── Storage helpers ──────────────────────────────────────────────────────────
@@ -236,6 +238,12 @@ async function runScan() {
       scanState.sendersFound = Object.keys(senders).length;
       scanState.message = `Folder ${i + 1} of ${allFolders.length}: ${accountName} | ${folder.name}`;
 
+      // Handle pause/stop
+      while (scanState.paused && !scanState.stopped) {
+        await new Promise(r => setTimeout(r, 200));
+      }
+      if (scanState.stopped) break;
+
       try {
         let page = await browser.messages.list(folder);
 
@@ -364,12 +372,22 @@ async function runScan() {
 
     await saveSubscriptions(merged);
 
+    const finalMessagesScanned = scanState.messagesScanned;
+    const finalSendersFound = Object.keys(senders).length;
+    const wasStopped = scanState.stopped;
+
     scanState = {
       status: 'done',
-      progress: allFolders.length,
+      progress: wasStopped ? scanState.progress : allFolders.length,
       total: allFolders.length,
-      message: `Done. Found ${Object.keys(senders).length} senders with unsubscribe options.`,
-      done: true
+      messagesScanned: finalMessagesScanned,
+      sendersFound: finalSendersFound,
+      message: wasStopped
+        ? `Stopped. Found ${finalSendersFound} subscriptions so far.`
+        : `Done. Found ${finalSendersFound} subscriptions with unsubscribe options.`,
+      done: true,
+      paused: false,
+      stopped: false
     };
 
   } catch (e) {
@@ -582,6 +600,17 @@ browser.runtime.onMessage.addListener((request, sender) => {
 
     case 'getScanStatus':
       return Promise.resolve(scanState);
+
+    case 'pauseScan':
+      if (scanState.status === 'scanning') {
+        scanState.paused = !scanState.paused;
+      }
+      return Promise.resolve({ ok: true, paused: scanState.paused });
+
+    case 'stopScan':
+      scanState.stopped = true;
+      scanState.paused = false;
+      return Promise.resolve({ ok: true });
 
     case 'getStats':
       return getStats();

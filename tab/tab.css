@@ -33,6 +33,12 @@ body{display:flex;overflow:hidden}
 }
 #scan-btn:hover{opacity:.85}
 #scan-btn:disabled{opacity:.5;cursor:not-allowed}
+.scan-controls{display:none;gap:6px;margin-top:6px}
+#pause-btn{flex:1;padding:7px;border:1px solid var(--border);border-radius:8px;background:transparent;color:var(--text);font-size:12px;font-weight:600;cursor:pointer;transition:all .15s}
+#pause-btn:hover{background:var(--border)}
+#stop-btn{flex:1;padding:7px;border:none;border-radius:8px;background:var(--danger);color:#fff;font-size:12px;font-weight:600;cursor:pointer;transition:opacity .15s}
+#stop-btn:hover{opacity:.85}
+#stop-btn:disabled{opacity:.5;cursor:not-allowed}
 .progress-wrap{margin-top:10px;display:none}
 .progress-bar-outer{height:6px;background:var(--border);border-radius:3px;overflow:hidden;margin-bottom:6px}
 .progress-bar-inner{height:100%;background:var(--accent);border-radius:3px;transition:width .3s;width:0}
