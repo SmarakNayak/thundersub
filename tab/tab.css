@@ -193,7 +193,7 @@ body{display:flex;overflow:hidden}
 /* Modal */
 .modal-overlay{position:fixed;inset:0;background:rgba(0,0,0,.6);display:none;align-items:center;justify-content:center;z-index:9000}
 .modal-overlay.open{display:flex}
-.modal{background:var(--card);border:1px solid var(--border);border-radius:var(--radius);padding:24px;width:420px;max-width:90vw;box-shadow:0 12px 40px rgba(0,0,0,.5)}
+.modal{background:var(--card);border:1px solid var(--border);border-radius:var(--radius);padding:24px;width:480px;max-width:90vw;max-height:85vh;overflow-y:auto;box-shadow:0 12px 40px rgba(0,0,0,.5)}
 .modal h3{font-size:16px;font-weight:700;margin-bottom:16px}
 .modal h4{font-size:11px;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);margin-bottom:10px}
 .modal-addr-row{display:flex;align-items:center;gap:8px;padding:6px 8px;border-radius:6px;background:rgba(0,0,0,.2);margin-bottom:4px;font-size:13px}
@@ -232,6 +232,36 @@ label.modal-addr-row:hover{background:rgba(0,0,0,.3)}
   animation:spin .7s linear infinite;margin:0 auto 12px;
 }
 @keyframes spin{to{transform:rotate(360deg)}}
+
+/* View button */
+.btn-view{border-color:var(--border);background:transparent;color:var(--muted)}
+.btn-view:hover{background:var(--border);color:var(--text)}
+
+/* Modal folder checkboxes */
+#modal-folders-section{margin-top:16px}
+#modal-folders-section h4{font-size:11px;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);margin-bottom:8px}
+.modal-folder-row{display:flex;align-items:center;gap:8px;padding:5px 8px;border-radius:6px;background:rgba(0,0,0,.2);margin-bottom:3px;font-size:13px;cursor:pointer}
+.modal-folder-row:hover{background:rgba(0,0,0,.3)}
+.modal-folder-check{accent-color:var(--accent)}
+.modal-folder-name{flex:1;font-size:12px;color:var(--text)}
+.modal-folder-count{font-size:11px;color:var(--muted);font-weight:600}
+
+/* Folder tree picker */
+#modal-dest-wrap{margin-top:16px}
+#modal-dest-wrap h4{font-size:11px;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);margin-bottom:8px}
+.folder-tree{max-height:200px;overflow-y:auto;border:1px solid var(--border);border-radius:8px;padding:6px;background:rgba(0,0,0,.15)}
+.tree-account-name{font-size:11px;font-weight:700;color:var(--muted);padding:4px 6px;text-transform:uppercase;letter-spacing:.04em}
+.tree-node{padding:1px 0}
+.tree-folder-label{display:flex;align-items:center;gap:6px;padding:4px 6px;border-radius:5px;cursor:pointer;font-size:12px;color:var(--text)}
+.tree-folder-label:hover{background:rgba(255,255,255,.05)}
+.tree-folder-label input[type="radio"]{accent-color:var(--accent)}
+.tree-toggle{width:14px;text-align:center;cursor:pointer;color:var(--muted);font-size:10px;user-select:none;flex-shrink:0}
+.tree-spacer{width:14px;flex-shrink:0}
+.tree-folder-icon{font-size:13px;flex-shrink:0}
+.create-folder-row{margin-top:8px}
+.create-folder-form{display:flex;gap:6px;margin-top:6px}
+.folder-name-input{flex:1;padding:6px 10px;border:1px solid var(--border);border-radius:6px;background:rgba(0,0,0,.2);color:var(--text);font-size:12px;font-family:var(--font);outline:none}
+.folder-name-input:focus{border-color:var(--accent)}
 
 .card.fading{animation:cardFade .3s ease forwards}
 @keyframes cardFade{to{opacity:0;transform:scale(.96)}}

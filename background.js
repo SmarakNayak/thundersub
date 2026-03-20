@@ -182,60 +182,33 @@ async function collectAllFolders(account) {
 // ── Message group helpers ────────────────────────────────────────────────────
 //
 // messageGroups is an array of:
-//   { recipientAddress, accountName, folderName, messageIds, unsubUrls, oneClick, hasMailto, hasHttp, embeddedUrl }
+//   { accountName, folderName, messageIds }
 //
-// Keyed by (recipientAddress, accountName, folderName) so unsubscribe URLs are
-// correctly scoped to the address that received the email, while delete/archive
-// still operates by account/folder.
+// Simple (accountName, folderName) keying for delete/archive scope.
+// Unsub data lives at the top level of each subscription.
 
-function addToMessageGroups(groups, recipientAddress, accountName, folderName, msgId, unsubData) {
-  let group = groups.find(g =>
-    g.recipientAddress === recipientAddress &&
-    g.accountName === accountName &&
-    g.folderName === folderName
-  );
+function addToMessageGroups(groups, accountName, folderName, msgId) {
+  let group = groups.find(g => g.accountName === accountName && g.folderName === folderName);
   if (!group) {
-    group = { recipientAddress, accountName, folderName, messageIds: [], unsubUrls: [], oneClick: false, hasMailto: false, hasHttp: false, embeddedUrl: null };
+    group = { accountName, folderName, messageIds: [] };
     groups.push(group);
   }
   group.messageIds.push(msgId);
-  if (unsubData) {
-    for (const u of (unsubData.urls || [])) {
-      if (!group.unsubUrls.includes(u)) group.unsubUrls.push(u);
-    }
-    if (unsubData.oneClick) group.oneClick = true;
-    if (unsubData.hasMailto) group.hasMailto = true;
-    if (unsubData.hasHttp) group.hasHttp = true;
-    if (unsubData.embeddedUrl && !group.embeddedUrl) group.embeddedUrl = unsubData.embeddedUrl;
-  }
 }
 
-function getIdsForScope(groups, scope, accountName, folderName) {
-  switch (scope) {
-    case 'folder':
-      return groups
-        .filter(g => g.accountName === accountName && g.folderName === folderName)
-        .flatMap(g => g.messageIds);
-    case 'account':
-      return groups
-        .filter(g => g.accountName === accountName)
-        .flatMap(g => g.messageIds);
-    case 'all':
-    default:
-      return groups.flatMap(g => g.messageIds);
+function getIdsForFolders(groups, selectedFolders) {
+  if (!selectedFolders || selectedFolders.length === 0) {
+    return groups.flatMap(g => g.messageIds);
   }
+  return groups
+    .filter(g => selectedFolders.some(f => f.accountName === g.accountName && f.folderName === g.folderName))
+    .flatMap(g => g.messageIds);
 }
 
-function removeIdsFromGroups(groups, scope, accountName, folderName) {
-  switch (scope) {
-    case 'folder':
-      return groups.filter(g => !(g.accountName === accountName && g.folderName === folderName));
-    case 'account':
-      return groups.filter(g => g.accountName !== accountName);
-    case 'all':
-    default:
-      return [];
-  }
+function removeGroupsForFolders(groups, selectedFolders) {
+  if (!selectedFolders || selectedFolders.length === 0) return [];
+  return groups
+    .filter(g => !selectedFolders.some(f => f.accountName === g.accountName && f.folderName === g.folderName));
 }
 
 function totalMessageCount(groups) {
@@ -260,8 +233,8 @@ async function runScan() {
     scanState.total = allFolders.length;
     scanState.message = `Scanning ${allFolders.length} folders...`;
 
-    // Accumulate by sender email
-    const senders = {};
+    // Accumulate by (senderEmail, recipientAddress) — the atomic subscription unit
+    const subs = {};
 
     for (let i = 0; i < allFolders.length; i++) {
       const { folder, accountName } = allFolders[i];
@@ -309,17 +282,27 @@ async function runScan() {
               const { name, email } = parseFromHeader(m.author);
               if (!email) continue;
 
-              if (!senders[email]) {
-                senders[email] = {
+              const recipientAddress = parseRecipientAddress(full);
+              const key = `${email}|${recipientAddress}`;
+
+              if (!subs[key]) {
+                subs[key] = {
                   senderName: name,
+                  senderEmail: email,
+                  recipientAddress,
                   emailCount: 0,
                   lastDate: '',
                   sampleSubject: '',
+                  unsubUrls: [],
+                  oneClick: false,
+                  hasMailto: false,
+                  hasHttp: false,
+                  embeddedUrl: null,
                   messageGroups: []
                 };
               }
 
-              const s = senders[email];
+              const s = subs[key];
               s.emailCount++;
               const dateStr = m.date ? new Date(m.date).toISOString() : '';
               if (dateStr && (!s.lastDate || dateStr > s.lastDate)) {
@@ -327,10 +310,18 @@ async function runScan() {
                 s.sampleSubject = m.subject || '';
               }
               if (name && !s.senderName) s.senderName = name;
-              const recipientAddress = parseRecipientAddress(full);
-              addToMessageGroups(s.messageGroups, recipientAddress, accountName, folder.name, m.id,
-                { urls, oneClick, hasMailto, hasHttp, embeddedUrl });
-              scanState.sendersFound = Object.keys(senders).length;
+
+              // Merge unsub data at top level
+              for (const u of urls) {
+                if (!s.unsubUrls.includes(u)) s.unsubUrls.push(u);
+              }
+              if (oneClick) s.oneClick = true;
+              if (hasMailto) s.hasMailto = true;
+              if (hasHttp) s.hasHttp = true;
+              if (embeddedUrl && !s.embeddedUrl) s.embeddedUrl = embeddedUrl;
+
+              addToMessageGroups(s.messageGroups, accountName, folder.name, m.id);
+              scanState.sendersFound = Object.keys(subs).length;
             } catch (e) {
               // Skip individual messages that fail
             }
@@ -352,14 +343,15 @@ async function runScan() {
     const existing = await loadSubscriptions();
     const existingMap = {};
     for (const sub of existing) {
-      existingMap[sub.senderEmail] = sub;
+      const k = `${sub.senderEmail}|${sub.recipientAddress || ''}`;
+      existingMap[k] = sub;
     }
 
     const now = new Date().toISOString();
     const merged = [];
 
-    for (const [email, s] of Object.entries(senders)) {
-      const prev = existingMap[email];
+    for (const [key, s] of Object.entries(subs)) {
+      const prev = existingMap[key];
 
       // Cap message IDs per group to avoid storage bloat
       const cappedGroups = s.messageGroups.map(g => ({
@@ -368,16 +360,18 @@ async function runScan() {
       }));
 
       merged.push({
-        senderEmail: email,
+        senderEmail: s.senderEmail,
         senderName: s.senderName,
+        recipientAddress: s.recipientAddress,
         emailCount: s.emailCount,
         lastDate: s.lastDate,
         sampleSubject: s.sampleSubject,
-        // Derived aggregate fields for quick badge/display access
-        oneClick: cappedGroups.some(g => g.oneClick),
-        hasMailto: cappedGroups.some(g => g.hasMailto),
-        hasHttp: cappedGroups.some(g => g.hasHttp),
-        hasEmbedded: cappedGroups.some(g => !!g.embeddedUrl),
+        unsubUrls: s.unsubUrls,
+        oneClick: s.oneClick,
+        hasMailto: s.hasMailto,
+        hasHttp: s.hasHttp,
+        hasEmbedded: !!s.embeddedUrl,
+        embeddedUrl: s.embeddedUrl,
         messageGroups: cappedGroups,
         decision: (prev && (prev.decision === 'keep' || prev.decision === 'unsubscribed'))
           ? prev.decision : 'pending',
@@ -387,7 +381,8 @@ async function runScan() {
     }
 
     for (const prev of existing) {
-      if (!senders[prev.senderEmail]) {
+      const k = `${prev.senderEmail}|${prev.recipientAddress || ''}`;
+      if (!subs[k]) {
         merged.push(prev);
       }
     }
@@ -395,7 +390,7 @@ async function runScan() {
     await saveSubscriptions(merged);
 
     const finalMessagesScanned = scanState.messagesScanned;
-    const finalSendersFound = Object.keys(senders).length;
+    const finalSendersFound = Object.keys(subs).length;
     const wasStopped = scanState.stopped;
 
     scanState = {
@@ -467,20 +462,18 @@ async function unsubEmbedded(url) {
   return { ok: true };
 }
 
-// ── Delete / Archive with scope ──────────────────────────────────────────────
+// ── Delete / Move ────────────────────────────────────────────────────────────
 //
-// scope: 'folder' | 'account' | 'all'
-// accountName: required for 'folder' and 'account' scope
-// folderName: required for 'folder' scope
+// selectedFolders: [{accountName, folderName}, ...] — which source folders to act on (all if empty)
 
-async function deleteEmails(senderEmail, scope, accountName, folderName) {
+async function deleteEmails(senderEmail, recipientAddress, selectedFolders) {
   const subs = await loadSubscriptions();
-  const sub = subs.find(s => s.senderEmail === senderEmail);
+  const sub = subs.find(s => s.senderEmail === senderEmail && s.recipientAddress === recipientAddress);
   if (!sub || !sub.messageGroups || sub.messageGroups.length === 0) {
     return { deleted: 0 };
   }
 
-  const ids = getIdsForScope(sub.messageGroups, scope, accountName, folderName);
+  const ids = getIdsForFolders(sub.messageGroups, selectedFolders);
   if (ids.length === 0) return { deleted: 0 };
 
   let deleted = 0;
@@ -495,59 +488,47 @@ async function deleteEmails(senderEmail, scope, accountName, folderName) {
     }
   }
 
-  sub.messageGroups = removeIdsFromGroups(sub.messageGroups, scope, accountName, folderName);
+  sub.messageGroups = removeGroupsForFolders(sub.messageGroups, selectedFolders);
   sub.emailCount = totalMessageCount(sub.messageGroups);
   await saveSubscriptions(subs);
 
   return { deleted };
 }
 
-async function archiveEmails(senderEmail, scope, accountName, folderName) {
+async function moveEmails(senderEmail, recipientAddress, selectedFolders, destinationFolderId) {
   const subs = await loadSubscriptions();
-  const sub = subs.find(s => s.senderEmail === senderEmail);
+  const sub = subs.find(s => s.senderEmail === senderEmail && s.recipientAddress === recipientAddress);
   if (!sub || !sub.messageGroups || sub.messageGroups.length === 0) {
-    return { archived: 0 };
+    return { moved: 0 };
   }
 
-  const ids = getIdsForScope(sub.messageGroups, scope, accountName, folderName);
-  if (ids.length === 0) return { archived: 0 };
+  const ids = getIdsForFolders(sub.messageGroups, selectedFolders);
+  if (ids.length === 0) return { moved: 0 };
 
-  // Find archive folder
-  const accounts = await browser.accounts.list();
-  let archiveFolder = null;
-  for (const account of accounts) {
-    const folders = await collectAllFolders(account);
-    archiveFolder = folders.find(f => f.type === 'archives');
-    if (archiveFolder) break;
-  }
-  if (!archiveFolder) {
-    throw new Error('No archive folder found. Create an archive folder in Thunderbird first.');
-  }
-
-  let archived = 0;
+  let moved = 0;
   const batchSize = 50;
   for (let i = 0; i < ids.length; i += batchSize) {
     const batch = ids.slice(i, i + batchSize);
     try {
-      await browser.messages.move(batch, archiveFolder);
-      archived += batch.length;
+      await browser.messages.move(batch, destinationFolderId);
+      moved += batch.length;
     } catch (e) {
-      console.warn('Failed to archive batch:', e);
+      console.warn('Failed to move batch:', e);
     }
   }
 
-  sub.messageGroups = removeIdsFromGroups(sub.messageGroups, scope, accountName, folderName);
+  sub.messageGroups = removeGroupsForFolders(sub.messageGroups, selectedFolders);
   sub.emailCount = totalMessageCount(sub.messageGroups);
   await saveSubscriptions(subs);
 
-  return { archived };
+  return { moved };
 }
 
 // ── Other actions ────────────────────────────────────────────────────────────
-async function setDecision(senderEmail, decision, dispose) {
+async function setDecision(senderEmail, recipientAddress, decision, dispose) {
   const subs = await loadSubscriptions();
-  const sub = subs.find(s => s.senderEmail === senderEmail);
-  if (!sub) throw new Error('Sender not found');
+  const sub = subs.find(s => s.senderEmail === senderEmail && s.recipientAddress === recipientAddress);
+  if (!sub) throw new Error('Subscription not found');
 
   sub.decision = decision;
   sub.dispose = dispose || null;
@@ -575,40 +556,123 @@ async function getSubscriptions(filter) {
   return filtered;
 }
 
-// ── Test functions for delete/archive (no TB APIs, logs + updates storage) ───
+// ── Test functions for delete/move (no TB APIs, logs + updates storage) ──────
 
-async function testDeleteEmails(senderEmail, scope, accountName, folderName) {
+async function testDeleteEmails(senderEmail, recipientAddress, selectedFolders) {
   const subs = await loadSubscriptions();
-  const sub = subs.find(s => s.senderEmail === senderEmail);
+  const sub = subs.find(s => s.senderEmail === senderEmail && s.recipientAddress === recipientAddress);
   if (!sub || !sub.messageGroups || sub.messageGroups.length === 0) {
     return { deleted: 0 };
   }
 
-  const ids = getIdsForScope(sub.messageGroups, scope, accountName, folderName);
-  console.log(`[TEST] Would DELETE ${ids.length} emails from ${sub.senderName || ''} <${senderEmail}> | scope=${scope} account=${accountName || '*'} folder=${folderName || '*'}`);
+  const ids = getIdsForFolders(sub.messageGroups, selectedFolders);
+  const folderDesc = selectedFolders && selectedFolders.length
+    ? selectedFolders.map(f => `${f.accountName}/${f.folderName}`).join(', ')
+    : 'all';
+  console.log(`[TEST] Would DELETE ${ids.length} emails from ${sub.senderName || ''} <${senderEmail}> → ${recipientAddress} | folders=${folderDesc}`);
 
-  sub.messageGroups = removeIdsFromGroups(sub.messageGroups, scope, accountName, folderName);
+  sub.messageGroups = removeGroupsForFolders(sub.messageGroups, selectedFolders);
   sub.emailCount = totalMessageCount(sub.messageGroups);
   await saveSubscriptions(subs);
 
   return { deleted: ids.length };
 }
 
-async function testArchiveEmails(senderEmail, scope, accountName, folderName) {
+async function testMoveEmails(senderEmail, recipientAddress, selectedFolders, destinationFolderId) {
   const subs = await loadSubscriptions();
-  const sub = subs.find(s => s.senderEmail === senderEmail);
+  const sub = subs.find(s => s.senderEmail === senderEmail && s.recipientAddress === recipientAddress);
   if (!sub || !sub.messageGroups || sub.messageGroups.length === 0) {
-    return { archived: 0 };
+    return { moved: 0 };
   }
 
-  const ids = getIdsForScope(sub.messageGroups, scope, accountName, folderName);
-  console.log(`[TEST] Would ARCHIVE ${ids.length} emails from ${sub.senderName || ''} <${senderEmail}> | scope=${scope} account=${accountName || '*'} folder=${folderName || '*'}`);
+  const ids = getIdsForFolders(sub.messageGroups, selectedFolders);
+  const folderDesc = selectedFolders && selectedFolders.length
+    ? selectedFolders.map(f => `${f.accountName}/${f.folderName}`).join(', ')
+    : 'all';
+  console.log(`[TEST] Would MOVE ${ids.length} emails from ${sub.senderName || ''} <${senderEmail}> → ${recipientAddress} | folders=${folderDesc} → dest=${destinationFolderId}`);
 
-  sub.messageGroups = removeIdsFromGroups(sub.messageGroups, scope, accountName, folderName);
+  sub.messageGroups = removeGroupsForFolders(sub.messageGroups, selectedFolders);
   sub.emailCount = totalMessageCount(sub.messageGroups);
   await saveSubscriptions(subs);
 
-  return { archived: ids.length };
+  return { moved: ids.length };
+}
+
+// ── Folder tree / creation / view ────────────────────────────────────────────
+
+async function getFolderTree() {
+  const accounts = await browser.accounts.list();
+  const tree = [];
+
+  for (const account of accounts) {
+    const accountNode = { accountId: account.id, accountName: account.name, folders: [] };
+
+    async function walkFolders(tbFolders) {
+      const result = [];
+      for (const f of tbFolders) {
+        if (f.type === 'junk' || f.type === 'trash') continue;
+        const node = { id: f.id, name: f.name, path: f.path, type: f.type || '', subFolders: [] };
+        try {
+          const children = await browser.folders.getSubFolders(f, false);
+          if (children && children.length > 0) {
+            node.subFolders = await walkFolders(children);
+          }
+        } catch (e) { /* skip */ }
+        result.push(node);
+      }
+      return result;
+    }
+
+    if (account.folders && account.folders.length > 0) {
+      accountNode.folders = await walkFolders(account.folders);
+    }
+    tree.push(accountNode);
+  }
+
+  return tree;
+}
+
+async function createFolderCmd(parentFolderId, folderName) {
+  const folder = await browser.folders.create(parentFolderId, folderName);
+  return { id: folder.id, name: folder.name, path: folder.path };
+}
+
+async function viewSubscription(senderEmail, recipientAddress) {
+  const subs = await loadSubscriptions();
+  const sub = subs.find(s => s.senderEmail === senderEmail && s.recipientAddress === recipientAddress);
+  if (!sub || !sub.messageGroups || sub.messageGroups.length === 0) {
+    throw new Error('No messages found');
+  }
+
+  // Find the folder with the most messages
+  let bestGroup = sub.messageGroups[0];
+  for (const g of sub.messageGroups) {
+    if (g.messageIds.length > bestGroup.messageIds.length) bestGroup = g;
+  }
+
+  // Resolve folder ID
+  const accounts = await browser.accounts.list();
+  let folderId = null;
+  for (const account of accounts) {
+    if (account.name !== bestGroup.accountName) continue;
+    const folders = await collectAllFolders(account);
+    const found = folders.find(f => f.name === bestGroup.folderName);
+    if (found) { folderId = found.id; break; }
+  }
+
+  if (!folderId) throw new Error('Folder not found');
+
+  const tab = await browser.mailTabs.create({});
+  await browser.mailTabs.update(tab.id, { displayedFolder: folderId });
+  try {
+    await browser.mailTabs.setQuickFilter(tab.id, {
+      text: { text: senderEmail, author: true }
+    });
+  } catch (e) {
+    // Quick filter may fail on some setups — folder is still displayed
+  }
+
+  return { ok: true };
 }
 
 // ── Message handler ──────────────────────────────────────────────────────────
@@ -639,16 +703,25 @@ browser.runtime.onMessage.addListener((request, sender) => {
       return getSubscriptions(request.filter);
 
     case 'decide':
-      return setDecision(request.senderEmail, request.decision, request.dispose)
+      return setDecision(request.senderEmail, request.recipientAddress, request.decision, request.dispose)
         .then(() => ({ ok: true }));
 
     case 'deleteEmails':
       return (TEST_DELETE ? testDeleteEmails : deleteEmails)(
-        request.senderEmail, request.scope, request.accountName, request.folderName);
+        request.senderEmail, request.recipientAddress, request.selectedFolders);
 
-    case 'archiveEmails':
-      return (TEST_DELETE ? testArchiveEmails : archiveEmails)(
-        request.senderEmail, request.scope, request.accountName, request.folderName);
+    case 'moveEmails':
+      return (TEST_DELETE ? testMoveEmails : moveEmails)(
+        request.senderEmail, request.recipientAddress, request.selectedFolders, request.destinationFolderId);
+
+    case 'getFolderTree':
+      return getFolderTree();
+
+    case 'createFolder':
+      return createFolderCmd(request.parentFolderId, request.folderName);
+
+    case 'viewSubscription':
+      return viewSubscription(request.senderEmail, request.recipientAddress);
 
     case 'unsubOneClick':
       return unsubOneClick(request.url);

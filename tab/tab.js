@@ -39,8 +39,8 @@ function initials(name, email) {
   return (s[0] || '?').toUpperCase();
 }
 
-function sid(email) {
-  return email.replace(/[^a-zA-Z0-9]/g, '_');
+function sid(senderEmail, recipientAddress) {
+  return (senderEmail + '|' + (recipientAddress || '')).replace(/[^a-zA-Z0-9]/g, '_');
 }
 
 function senderLabel(sub) {
@@ -107,39 +107,18 @@ function totalCount(messageGroups) {
   return (messageGroups || []).reduce((sum, g) => sum + g.messageIds.length, 0);
 }
 
-// Collapse messageGroups by recipientAddress, merging unsubUrls per address.
-// This is the correct unit for unsubscribing — one request per recipient address.
-function getRecipientGroups(messageGroups) {
-  const byAddr = {};
-  for (const g of (messageGroups || [])) {
-    const addr = g.recipientAddress || '';
-    if (!byAddr[addr]) {
-      byAddr[addr] = { recipientAddress: addr, unsubUrls: [...(g.unsubUrls || [])], oneClick: g.oneClick || false, hasMailto: g.hasMailto || false, hasHttp: g.hasHttp || false, embeddedUrl: g.embeddedUrl || null };
-    } else {
-      for (const u of (g.unsubUrls || [])) {
-        if (!byAddr[addr].unsubUrls.includes(u)) byAddr[addr].unsubUrls.push(u);
-      }
-      if (g.oneClick) byAddr[addr].oneClick = true;
-      if (g.hasMailto) byAddr[addr].hasMailto = true;
-      if (g.hasHttp) byAddr[addr].hasHttp = true;
-      if (g.embeddedUrl && !byAddr[addr].embeddedUrl) byAddr[addr].embeddedUrl = g.embeddedUrl;
-    }
-  }
-  return Object.values(byAddr);
-}
-
 // ── Unsub methods ────────────────────────────────────────────────────────────
 
 const METHOD_LABELS = { oneclick: 'one-click', mail: 'email', web: 'browser', embedded: 'embedded link' };
 
-function getBestMethod(group) {
-  const urls = group.unsubUrls || [];
+function getBestMethod(sub) {
+  const urls = sub.unsubUrls || [];
   const httpUrl = urls.find(u => u.startsWith('http')) || '';
   const mailtoUrl = urls.find(u => u.startsWith('mailto')) || '';
-  if (group.oneClick && httpUrl) return { type: 'oneclick', url: httpUrl };
+  if (sub.oneClick && httpUrl) return { type: 'oneclick', url: httpUrl };
   if (mailtoUrl) return { type: 'mail', url: mailtoUrl };
   if (httpUrl) return { type: 'web', url: httpUrl };
-  if (group.embeddedUrl) return { type: 'embedded', url: group.embeddedUrl };
+  if (sub.embeddedUrl) return { type: 'embedded', url: sub.embeddedUrl };
   return null;
 }
 
@@ -147,10 +126,9 @@ function getBestMethod(group) {
 function buildCard(s) {
   const groups = s.messageGroups || [];
   const byAccount = groupsByAccount(groups);
-  const total = totalCount(groups);
   const color = avatarColor(s.senderEmail);
   const ini = initials(s.senderName, s.senderEmail);
-  const id = sid(s.senderEmail);
+  const id = sid(s.senderEmail, s.recipientAddress);
   const accountNames = Object.keys(byAccount);
 
   // Badges
@@ -166,7 +144,7 @@ function buildCard(s) {
   const cardId = `card-${id}`;
 
   return `
-<div class="card" id="${cardId}" data-sender-email="${esc(s.senderEmail)}">
+<div class="card" id="${cardId}" data-sender-email="${esc(s.senderEmail)}" data-recipient-address="${esc(s.recipientAddress || '')}">
   <div class="card-body">
     <div class="card-top">
       <div class="avatar" style="background:${color}">${esc(ini)}</div>
@@ -180,11 +158,13 @@ function buildCard(s) {
       <span>${esc(dateStr)}</span>
       <span>${accountNames.map(a => esc(a)).join(', ')}</span>
     </div>
+    ${s.recipientAddress ? `<div class="card-accounts" title="Delivered to ${esc(s.recipientAddress)}">→ ${esc(s.recipientAddress)}</div>` : ''}
     ${s.sampleSubject ? `<div class="card-subject" title="${esc(s.sampleSubject)}">"${esc(s.sampleSubject.substring(0, 80))}"</div>` : ''}
   </div>
   <div class="card-actions">
-    <button class="btn btn-keep js-keep" data-sender-email="${esc(s.senderEmail)}">Keep</button>
-    <button class="btn btn-unsub js-open-modal" data-sender-email="${esc(s.senderEmail)}">Unsubscribe</button>
+    <button class="btn btn-view js-view" data-sender-email="${esc(s.senderEmail)}" data-recipient-address="${esc(s.recipientAddress || '')}">View</button>
+    <button class="btn btn-keep js-keep" data-sender-email="${esc(s.senderEmail)}" data-recipient-address="${esc(s.recipientAddress || '')}">Keep</button>
+    <button class="btn btn-unsub js-open-modal" data-sender-email="${esc(s.senderEmail)}" data-recipient-address="${esc(s.recipientAddress || '')}">Unsubscribe</button>
   </div>
 </div>`;
 }
@@ -195,13 +175,22 @@ function attachCardListeners() {
     const btn = e.target.closest('button');
     if (!btn) return;
 
+    if (btn.classList.contains('js-view')) {
+      try {
+        await bg('viewSubscription', { senderEmail: btn.dataset.senderEmail, recipientAddress: btn.dataset.recipientAddress });
+      } catch (e) {
+        toast('Failed to open emails: ' + (e.message || e), 'error');
+      }
+      return;
+    }
+
     if (btn.classList.contains('js-keep')) {
-      await doKeep(btn.dataset.senderEmail);
+      await doKeep(btn.dataset.senderEmail, btn.dataset.recipientAddress);
       return;
     }
 
     if (btn.classList.contains('js-open-modal')) {
-      openUnsubModal(btn.dataset.senderEmail);
+      openUnsubModal(btn.dataset.senderEmail, btn.dataset.recipientAddress);
       return;
     }
   });
@@ -209,41 +198,50 @@ function attachCardListeners() {
 
 // ── Unsubscribe modal ────────────────────────────────────────────────────────
 let modalSenderEmail = null;
+let modalRecipientAddress = null;
+let folderTreeCache = null;
 
-function openUnsubModal(senderEmail) {
-  const sub = subsCache.find(s => s.senderEmail === senderEmail);
+function openUnsubModal(senderEmail, recipientAddress) {
+  const sub = subsCache.find(s => s.senderEmail === senderEmail && s.recipientAddress === recipientAddress);
   if (!sub) return;
 
   modalSenderEmail = senderEmail;
-  const recipientGroups = getRecipientGroups(sub.messageGroups);
+  modalRecipientAddress = recipientAddress;
+
+  const method = getBestMethod(sub);
+  const methodLabel = method ? METHOD_LABELS[method.type] : 'no method';
 
   document.getElementById('modal-title').textContent =
     `Unsubscribe from ${sub.senderName || sub.senderEmail}`;
 
+  // Recipient address
   const addrEl = document.getElementById('modal-addresses');
-  let html = '';
-  for (const g of recipientGroups) {
-    const m = getBestMethod(g);
-    const methodLabel = m ? METHOD_LABELS[m.type] : 'no method';
-    if (recipientGroups.length === 1) {
-      html += `<div class="modal-addr-row">
-        <span class="modal-addr">${esc(g.recipientAddress || '(unknown)')}</span>
-        <span class="modal-method">${esc(methodLabel)}</span>
-      </div>`;
-    } else {
-      html += `<label class="modal-addr-row">
-        <input type="checkbox" class="modal-addr-check" data-addr="${esc(g.recipientAddress)}" checked>
-        <span class="modal-addr">${esc(g.recipientAddress || '(unknown)')}</span>
-        <span class="modal-method">${esc(methodLabel)}</span>
-      </label>`;
-    }
-  }
-  if (recipientGroups.length === 0) {
-    html = '<div class="modal-addr-row"><span class="modal-addr" style="color:var(--muted)">No unsubscribe method available</span></div>';
-  }
-  addrEl.innerHTML = html;
+  addrEl.innerHTML = `<div class="modal-addr-row">
+    <span class="modal-addr">${esc(recipientAddress || '(unknown)')}</span>
+    <span class="modal-method">${esc(methodLabel)}</span>
+  </div>`;
 
+  // Source folder checkboxes
+  const groups = sub.messageGroups || [];
+  const foldersSection = document.getElementById('modal-folders-section');
+  const foldersEl = document.getElementById('modal-folders');
+  if (groups.length > 0) {
+    foldersEl.innerHTML = groups.map((g, i) => `
+      <label class="modal-folder-row">
+        <input type="checkbox" class="modal-folder-check" data-idx="${i}" checked>
+        <span class="modal-folder-name">${esc(g.accountName)} / ${esc(g.folderName)}</span>
+        <span class="modal-folder-count">${g.messageIds.length}</span>
+      </label>`).join('');
+    foldersSection.style.display = 'block';
+  } else {
+    foldersSection.style.display = 'none';
+  }
+
+  // Reset dispose & hide destination tree
   document.querySelector('input[name="dispose"][value="delete"]').checked = true;
+  document.getElementById('modal-dest-wrap').style.display = 'none';
+  document.getElementById('modal-new-folder-form').style.display = 'none';
+
   const confirmBtn = document.getElementById('modal-confirm');
   confirmBtn.disabled = false;
   confirmBtn.textContent = 'Unsubscribe';
@@ -254,68 +252,179 @@ function openUnsubModal(senderEmail) {
 function closeUnsubModal() {
   document.getElementById('unsub-modal-overlay').classList.remove('open');
   modalSenderEmail = null;
+  modalRecipientAddress = null;
+}
+
+// Show/hide destination tree when dispose option changes
+async function onDisposeChange() {
+  const dispose = document.querySelector('input[name="dispose"]:checked').value;
+  const destWrap = document.getElementById('modal-dest-wrap');
+
+  if (dispose === 'move') {
+    destWrap.style.display = 'block';
+    // Lazy-load folder tree
+    if (!folderTreeCache) {
+      document.getElementById('modal-dest-tree').innerHTML =
+        '<div style="padding:8px;color:var(--muted);font-size:12px">Loading folders...</div>';
+      try {
+        folderTreeCache = await bg('getFolderTree');
+      } catch (e) {
+        document.getElementById('modal-dest-tree').innerHTML =
+          '<div style="padding:8px;color:var(--danger);font-size:12px">Failed to load folders.</div>';
+        return;
+      }
+    }
+    renderFolderTree(folderTreeCache);
+  } else {
+    destWrap.style.display = 'none';
+  }
+}
+
+function renderFolderTree(tree) {
+  const container = document.getElementById('modal-dest-tree');
+  let html = '';
+  for (const account of tree) {
+    html += `<div class="tree-account">
+      <div class="tree-account-name">${esc(account.accountName)}</div>
+      ${renderFolderNodes(account.folders, 0)}
+    </div>`;
+  }
+  container.innerHTML = html;
+}
+
+function renderFolderNodes(folders, depth) {
+  let html = '';
+  for (const f of folders) {
+    const hasChildren = f.subFolders && f.subFolders.length > 0;
+    const indent = depth * 16;
+    html += `<div class="tree-node" style="padding-left:${indent}px">
+      <label class="tree-folder-label">
+        ${hasChildren
+          ? `<span class="tree-toggle" data-folder-id="${esc(f.id)}">&#9656;</span>`
+          : '<span class="tree-spacer"></span>'}
+        <input type="radio" name="dest-folder" value="${esc(f.id)}">
+        <span>${esc(f.name)}</span>
+      </label>
+    </div>`;
+    if (hasChildren) {
+      html += `<div class="tree-subtree" data-parent-id="${esc(f.id)}" style="display:none">
+        ${renderFolderNodes(f.subFolders, depth + 1)}
+      </div>`;
+    }
+  }
+  return html;
+}
+
+async function createNewFolder() {
+  const nameInput = document.getElementById('modal-new-folder-name');
+  const name = nameInput.value.trim();
+  if (!name) return;
+
+  const destRadio = document.querySelector('input[name="dest-folder"]:checked');
+  if (!destRadio) {
+    toast('Select a parent folder first', 'info');
+    return;
+  }
+
+  try {
+    const result = await bg('createFolder', { parentFolderId: destRadio.value, folderName: name });
+    toast(`Created folder "${name}"`, 'success');
+    nameInput.value = '';
+    document.getElementById('modal-new-folder-form').style.display = 'none';
+    // Refresh tree and auto-select new folder
+    folderTreeCache = await bg('getFolderTree');
+    renderFolderTree(folderTreeCache);
+    // Select the new folder
+    const newRadio = document.querySelector(`input[name="dest-folder"][value="${CSS.escape(result.id)}"]`);
+    if (newRadio) newRadio.checked = true;
+  } catch (e) {
+    toast('Failed to create folder: ' + (e.message || e), 'error');
+  }
+}
+
+function getSelectedFolders() {
+  const sub = subsCache.find(s => s.senderEmail === modalSenderEmail && s.recipientAddress === modalRecipientAddress);
+  if (!sub) return [];
+  const groups = sub.messageGroups || [];
+  const checks = document.querySelectorAll('.modal-folder-check');
+  if (checks.length === 0) return [];
+  return [...checks]
+    .filter(cb => cb.checked)
+    .map(cb => {
+      const g = groups[parseInt(cb.dataset.idx)];
+      return { accountName: g.accountName, folderName: g.folderName };
+    });
 }
 
 async function doUnsubscribeConfirm() {
   if (!modalSenderEmail) return;
-  const sub = subsCache.find(s => s.senderEmail === modalSenderEmail);
+  const sub = subsCache.find(s => s.senderEmail === modalSenderEmail && s.recipientAddress === modalRecipientAddress);
   if (!sub) return;
 
-  const recipientGroups = getRecipientGroups(sub.messageGroups);
-  const checkboxes = document.querySelectorAll('.modal-addr-check');
-  const selectedAddrs = checkboxes.length === 0
-    ? recipientGroups.map(g => g.recipientAddress)
-    : [...checkboxes].filter(cb => cb.checked).map(cb => cb.dataset.addr);
-
   const dispose = document.querySelector('input[name="dispose"]:checked').value;
+  const selectedFolders = getSelectedFolders();
 
   const confirmBtn = document.getElementById('modal-confirm');
   confirmBtn.disabled = true;
   confirmBtn.textContent = 'Unsubscribing...';
 
-  // Fire unsubscribe for each selected address
-  let succeeded = 0;
-  let failed = 0;
-  for (const addr of selectedAddrs) {
-    const group = recipientGroups.find(g => g.recipientAddress === addr);
-    if (!group) continue;
-    const method = getBestMethod(group);
-    if (!method) continue;
+  // Fire unsubscribe
+  let ok = false;
+  const method = getBestMethod(sub);
+  if (method) {
     try {
       if (method.type === 'oneclick') {
         const r = await bg('unsubOneClick', { url: method.url });
-        if (r.ok) succeeded++; else failed++;
+        ok = r.ok;
       } else if (method.type === 'mail') {
         await bg('unsubMail', { url: method.url, senderEmail: modalSenderEmail });
-        succeeded++;
+        ok = true;
       } else {
         await bg('unsubWeb', { url: method.url });
-        succeeded++;
+        ok = true;
       }
     } catch (e) {
-      failed++;
+      ok = false;
     }
   }
 
-  // Apply dispose action
-  if (dispose !== 'keep') {
+  // Apply dispose action on selected folders
+  if (dispose === 'delete' && selectedFolders.length > 0) {
     try {
-      const command = dispose === 'delete' ? 'deleteEmails' : 'archiveEmails';
-      await bg(command, { senderEmail: modalSenderEmail, scope: 'all', accountName: '', folderName: '' });
+      await bg('deleteEmails', { senderEmail: modalSenderEmail, recipientAddress: modalRecipientAddress, selectedFolders });
     } catch (e) {
-      toast('Error handling emails: ' + e.message, 'error');
+      toast('Error deleting emails: ' + (e.message || e), 'error');
+    }
+  } else if (dispose === 'move' && selectedFolders.length > 0) {
+    const destRadio = document.querySelector('input[name="dest-folder"]:checked');
+    if (destRadio) {
+      try {
+        await bg('moveEmails', {
+          senderEmail: modalSenderEmail,
+          recipientAddress: modalRecipientAddress,
+          selectedFolders,
+          destinationFolderId: destRadio.value
+        });
+      } catch (e) {
+        toast('Error moving emails: ' + (e.message || e), 'error');
+      }
+    } else {
+      toast('Select a destination folder', 'info');
+      confirmBtn.disabled = false;
+      confirmBtn.textContent = 'Unsubscribe';
+      return;
     }
   }
 
   // Mark as unsubscribed
   try {
-    await bg('decide', { senderEmail: modalSenderEmail, decision: 'unsubscribed', dispose });
+    await bg('decide', { senderEmail: modalSenderEmail, recipientAddress: modalRecipientAddress, decision: 'unsubscribed', dispose });
   } catch (e) {
-    toast('Error: ' + e.message, 'error');
+    toast('Error: ' + (e.message || e), 'error');
   }
 
   // Remove card
-  const cardId = `card-${sid(modalSenderEmail)}`;
+  const cardId = `card-${sid(modalSenderEmail, modalRecipientAddress)}`;
   const card = document.getElementById(cardId);
   if (card) {
     card.classList.add('fading');
@@ -323,10 +432,10 @@ async function doUnsubscribeConfirm() {
   }
 
   const name = sub.senderName || sub.senderEmail;
-  if (failed === 0) {
+  if (ok) {
     toast(`Unsubscribed from ${name}`, 'success');
   } else {
-    toast(`Unsubscribed from ${name} (${failed} failed)`, 'error');
+    toast(`Unsubscribed from ${name} (request may have failed)`, 'error');
   }
 
   closeUnsubModal();
@@ -334,12 +443,12 @@ async function doUnsubscribeConfirm() {
 }
 
 // ── Keep action ──────────────────────────────────────────────────────────────
-async function doKeep(senderEmail) {
-  const cardId = `card-${sid(senderEmail)}`;
+async function doKeep(senderEmail, recipientAddress) {
+  const cardId = `card-${sid(senderEmail, recipientAddress)}`;
   const card = document.getElementById(cardId);
 
   try {
-    await bg('decide', { senderEmail, decision: 'keep', dispose: null });
+    await bg('decide', { senderEmail, recipientAddress, decision: 'keep', dispose: null });
     toast(`Keeping ${senderEmail}`, 'success');
 
     if (card) {
@@ -453,6 +562,34 @@ document.addEventListener('DOMContentLoaded', async () => {
   document.getElementById('modal-confirm').addEventListener('click', doUnsubscribeConfirm);
   document.getElementById('unsub-modal-overlay').addEventListener('click', (e) => {
     if (e.target.id === 'unsub-modal-overlay') closeUnsubModal();
+  });
+
+  // Dispose radio change → show/hide folder tree
+  document.querySelectorAll('input[name="dispose"]').forEach(r => {
+    r.addEventListener('change', onDisposeChange);
+  });
+
+  // Folder tree toggle (expand/collapse) — delegated
+  document.getElementById('modal-dest-tree').addEventListener('click', (e) => {
+    const toggle = e.target.closest('.tree-toggle');
+    if (!toggle) return;
+    const folderId = toggle.dataset.folderId;
+    const subtree = document.querySelector(`.tree-subtree[data-parent-id="${CSS.escape(folderId)}"]`);
+    if (!subtree) return;
+    const open = subtree.style.display !== 'none';
+    subtree.style.display = open ? 'none' : 'block';
+    toggle.innerHTML = open ? '&#9656;' : '&#9662;';
+  });
+
+  // New folder UI
+  document.getElementById('modal-new-folder-btn').addEventListener('click', () => {
+    const form = document.getElementById('modal-new-folder-form');
+    form.style.display = form.style.display === 'none' ? 'flex' : 'none';
+    if (form.style.display === 'flex') document.getElementById('modal-new-folder-name').focus();
+  });
+  document.getElementById('modal-create-folder-btn').addEventListener('click', createNewFolder);
+  document.getElementById('modal-new-folder-name').addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') createNewFolder();
   });
 
   document.getElementById('pause-btn').addEventListener('click', async () => {
