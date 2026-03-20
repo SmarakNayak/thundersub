@@ -42,7 +42,13 @@ body{display:flex;overflow:hidden}
 .progress-wrap{margin-top:10px;display:none}
 .progress-bar-outer{height:6px;background:var(--border);border-radius:3px;overflow:hidden;margin-bottom:6px}
 .progress-bar-inner{height:100%;background:var(--accent);border-radius:3px;transition:width .3s;width:0}
-#scan-msg{font-size:11px;color:var(--muted);line-height:1.4;word-break:break-all;white-space:pre-line}
+.scan-info-row{display:flex;justify-content:space-between;align-items:center;gap:6px;margin-bottom:4px;margin-top:8px}
+#scan-msg{font-size:11px;color:var(--muted);line-height:1.4;flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+#scan-msg.wrap{white-space:normal;overflow:visible;text-overflow:clip}
+#scan-state-badge{font-size:10px;font-weight:700;padding:2px 7px;border-radius:8px;white-space:nowrap;flex-shrink:0}
+.badge-paused{background:rgba(245,158,11,.15);color:var(--warn)}
+.badge-stopped{background:rgba(239,68,68,.15);color:var(--danger)}
+.scan-stats-row{display:flex;flex-direction:column;gap:2px;font-size:11px;color:var(--muted)}
 
 .filters-section{padding:16px 20px}
 .filters-section h3{font-size:11px;text-transform:uppercase;letter-spacing:.08em;color:var(--muted);margin-bottom:10px}
@@ -64,7 +70,6 @@ body{display:flex;overflow:hidden}
 #main{flex:1;height:100vh;overflow-y:auto;padding:24px}
 #main-header{margin-bottom:20px;display:flex;align-items:center;justify-content:space-between}
 #main-header h2{font-size:18px;font-weight:700}
-#card-count{font-size:13px;color:var(--muted)}
 
 #cards-grid{
   display:grid;grid-template-columns:repeat(auto-fill,minmax(380px,1fr));gap:16px;
@@ -152,6 +157,12 @@ body{display:flex;overflow:hidden}
 .unsub-method .btn{flex-shrink:0}
 .method-desc{font-size:11px;color:var(--muted);line-height:1.4}
 
+/* Per-recipient unsubscribe sections */
+.unsub-recipient{margin-bottom:12px;padding-bottom:10px;border-bottom:1px solid var(--border)}
+.unsub-recipient:last-of-type{border-bottom:none;margin-bottom:0;padding-bottom:0}
+.unsub-recipient-header{font-size:11px;font-weight:600;color:var(--text);margin-bottom:6px;font-family:monospace;letter-spacing:.02em}
+.unsub-all-wrap{margin-top:12px;padding-top:10px;border-top:1px solid var(--border)}
+
 /* Disposition breakdown */
 .dispose-breakdown{display:flex;flex-direction:column;gap:10px;margin-bottom:12px}
 .dispose-account{background:rgba(0,0,0,.2);border-radius:8px;padding:10px 12px}
@@ -178,6 +189,25 @@ body{display:flex;overflow:hidden}
 }
 #empty-state .icon{font-size:48px;margin-bottom:16px}
 #empty-state h3{font-size:18px;margin-bottom:8px;color:var(--text)}
+
+/* Modal */
+.modal-overlay{position:fixed;inset:0;background:rgba(0,0,0,.6);display:none;align-items:center;justify-content:center;z-index:9000}
+.modal-overlay.open{display:flex}
+.modal{background:var(--card);border:1px solid var(--border);border-radius:var(--radius);padding:24px;width:420px;max-width:90vw;box-shadow:0 12px 40px rgba(0,0,0,.5)}
+.modal h3{font-size:16px;font-weight:700;margin-bottom:16px}
+.modal h4{font-size:11px;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);margin-bottom:10px}
+.modal-addr-row{display:flex;align-items:center;gap:8px;padding:6px 8px;border-radius:6px;background:rgba(0,0,0,.2);margin-bottom:4px;font-size:13px}
+label.modal-addr-row{cursor:pointer}
+label.modal-addr-row:hover{background:rgba(0,0,0,.3)}
+.modal-addr-check{accent-color:var(--accent)}
+.modal-addr{flex:1;font-family:monospace;font-size:12px;color:var(--text)}
+.modal-method{font-size:10px;color:var(--muted);font-weight:600;padding:2px 6px;border-radius:6px;background:var(--border);white-space:nowrap}
+.modal-dispose{margin-top:16px}
+.modal-dispose-options{display:flex;gap:8px}
+.dispose-option{display:flex;align-items:center;gap:5px;padding:8px 14px;border-radius:8px;background:rgba(0,0,0,.2);cursor:pointer;font-size:13px;font-weight:500;flex:1;transition:background .15s}
+.dispose-option:hover{background:rgba(0,0,0,.3)}
+.dispose-option input{accent-color:var(--accent)}
+.modal-footer{display:flex;justify-content:flex-end;gap:8px;margin-top:20px}
 
 /* Toast */
 #toast-container{position:fixed;bottom:20px;right:20px;display:flex;flex-direction:column;gap:8px;z-index:9999}

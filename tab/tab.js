@@ -1,7 +1,8 @@
 'use strict';
 
-let currentFilter = 'all';
+let currentFilter = 'pending';
 let scanPollTimer = null;
+let subsCache = [];
 
 // ── Utils ────────────────────────────────────────────────────────────────────
 function esc(s) {
@@ -70,6 +71,7 @@ async function loadSubs(filter) {
 
   try {
     const subs = await bg('getSubscriptions', { filter: filter === 'all' ? null : filter });
+    subsCache = subs;
     renderCards(subs);
   } catch (e) {
     grid.innerHTML = '<div style="color:var(--danger);padding:40px">Failed to load.</div>';
@@ -79,7 +81,6 @@ async function loadSubs(filter) {
 function renderCards(subs) {
   const grid = document.getElementById('cards-grid');
   const empty = document.getElementById('empty-state');
-  document.getElementById('card-count').textContent = subs.length + ' subscriptions';
 
   if (!subs.length) {
     grid.innerHTML = '';
@@ -88,10 +89,9 @@ function renderCards(subs) {
   }
   empty.style.display = 'none';
   grid.innerHTML = subs.map(s => buildCard(s)).join('');
-  attachCardListeners();
 }
 
-// ── Message group helpers (mirror background.js) ─────────────────────────────
+// ── Message group helpers ─────────────────────────────────────────────────────
 
 function groupsByAccount(messageGroups) {
   // Returns: { accountName: { folderName: count, ... }, ... }
@@ -107,72 +107,50 @@ function totalCount(messageGroups) {
   return (messageGroups || []).reduce((sum, g) => sum + g.messageIds.length, 0);
 }
 
-function accountCount(messageGroups, accountName) {
-  return (messageGroups || [])
-    .filter(g => g.accountName === accountName)
-    .reduce((sum, g) => sum + g.messageIds.length, 0);
-}
-
-function folderCount(messageGroups, accountName, folderName) {
-  return (messageGroups || [])
-    .filter(g => g.accountName === accountName && g.folderName === folderName)
-    .reduce((sum, g) => sum + g.messageIds.length, 0);
+// Collapse messageGroups by recipientAddress, merging unsubUrls per address.
+// This is the correct unit for unsubscribing — one request per recipient address.
+function getRecipientGroups(messageGroups) {
+  const byAddr = {};
+  for (const g of (messageGroups || [])) {
+    const addr = g.recipientAddress || '';
+    if (!byAddr[addr]) {
+      byAddr[addr] = { recipientAddress: addr, unsubUrls: [...(g.unsubUrls || [])], oneClick: g.oneClick || false, hasMailto: g.hasMailto || false, hasHttp: g.hasHttp || false, embeddedUrl: g.embeddedUrl || null };
+    } else {
+      for (const u of (g.unsubUrls || [])) {
+        if (!byAddr[addr].unsubUrls.includes(u)) byAddr[addr].unsubUrls.push(u);
+      }
+      if (g.oneClick) byAddr[addr].oneClick = true;
+      if (g.hasMailto) byAddr[addr].hasMailto = true;
+      if (g.hasHttp) byAddr[addr].hasHttp = true;
+      if (g.embeddedUrl && !byAddr[addr].embeddedUrl) byAddr[addr].embeddedUrl = g.embeddedUrl;
+    }
+  }
+  return Object.values(byAddr);
 }
 
 // ── Unsub methods ────────────────────────────────────────────────────────────
-function getUnsubMethods(s) {
-  const methods = [];
-  const urls = s.unsubUrls || [];
+
+const METHOD_LABELS = { oneclick: 'one-click', mail: 'email', web: 'browser', embedded: 'embedded link' };
+
+function getBestMethod(group) {
+  const urls = group.unsubUrls || [];
   const httpUrl = urls.find(u => u.startsWith('http')) || '';
   const mailtoUrl = urls.find(u => u.startsWith('mailto')) || '';
-
-  if (s.oneClick && httpUrl) {
-    methods.push({
-      type: 'oneclick', label: 'One-Click Unsubscribe',
-      description: 'Sends an automatic POST request to the sender (RFC 8058). Fastest and most reliable.',
-      url: httpUrl, btnClass: 'btn-success'
-    });
-  }
-  if (mailtoUrl) {
-    methods.push({
-      type: 'mail', label: 'Send Unsubscribe Email',
-      description: 'Sends an email requesting removal from the mailing list.',
-      url: mailtoUrl, btnClass: 'btn-accent'
-    });
-  }
-  if (httpUrl && !s.oneClick) {
-    methods.push({
-      type: 'web', label: 'Open Unsubscribe Page',
-      description: 'Opens the unsubscribe link in your browser. You may need to confirm on the page.',
-      url: httpUrl, btnClass: 'btn-accent'
-    });
-  } else if (httpUrl && s.oneClick) {
-    methods.push({
-      type: 'web', label: 'Open in Browser (fallback)',
-      description: 'Opens the unsubscribe page manually if one-click didn\'t work.',
-      url: httpUrl, btnClass: 'btn-outline'
-    });
-  }
-  if (s.embeddedUrl) {
-    methods.push({
-      type: 'embedded', label: 'Open Link from Email Body',
-      description: 'Found an unsubscribe link inside the email content. Opens in your browser.',
-      url: s.embeddedUrl, btnClass: 'btn-outline'
-    });
-  }
-  return methods;
+  if (group.oneClick && httpUrl) return { type: 'oneclick', url: httpUrl };
+  if (mailtoUrl) return { type: 'mail', url: mailtoUrl };
+  if (httpUrl) return { type: 'web', url: httpUrl };
+  if (group.embeddedUrl) return { type: 'embedded', url: group.embeddedUrl };
+  return null;
 }
 
 // ── Build card ───────────────────────────────────────────────────────────────
 function buildCard(s) {
-  const urls = s.unsubUrls || [];
   const groups = s.messageGroups || [];
   const byAccount = groupsByAccount(groups);
   const total = totalCount(groups);
   const color = avatarColor(s.senderEmail);
   const ini = initials(s.senderName, s.senderEmail);
   const id = sid(s.senderEmail);
-  const methods = getUnsubMethods(s);
   const accountNames = Object.keys(byAccount);
 
   // Badges
@@ -180,42 +158,12 @@ function buildCard(s) {
   if (s.oneClick) badges += `<span class="badge badge-green">One-Click</span>`;
   if (s.hasMailto) badges += `<span class="badge badge-purple">Mailto</span>`;
   if (s.hasHttp && !s.oneClick) badges += `<span class="badge badge-orange">HTTP</span>`;
-  if (s.embeddedUrl && !s.hasHttp && !s.hasMailto && !s.oneClick) badges += `<span class="badge badge-orange">Embedded</span>`;
+  if (s.hasEmbedded && !s.hasHttp && !s.hasMailto && !s.oneClick) badges += `<span class="badge badge-orange">Embedded</span>`;
   if (s.decision === 'keep') badges += `<span class="badge badge-kept">Kept</span>`;
   if (s.decision === 'unsubscribed') badges += `<span class="badge badge-unsub">Unsubscribed</span>`;
 
   const dateStr = s.lastDate ? new Date(s.lastDate).toLocaleDateString() : '';
-
-  // Unsub methods HTML
-  let unsubHtml = '';
-  if (methods.length === 0) {
-    unsubHtml = '<span style="color:var(--muted);font-size:12px">No unsubscribe method found</span>';
-  } else {
-    if (urls.length > 0) {
-      unsubHtml += `<div class="unsub-urls">${urls.map(u => `<div class="url-item">${esc(u)}</div>`).join('')}</div>`;
-    }
-    if (s.embeddedUrl && !urls.includes(s.embeddedUrl)) {
-      unsubHtml += `<div class="unsub-urls"><div class="url-item">Embedded: ${esc(s.embeddedUrl)}</div></div>`;
-    }
-    unsubHtml += '<div class="unsub-methods">';
-    for (const m of methods) {
-      unsubHtml += `
-        <div class="unsub-method">
-          <button class="btn btn-sm ${m.btnClass} js-unsub-method"
-            data-method="${m.type}" data-url="${esc(m.url)}"
-            data-sender-email="${esc(s.senderEmail)}" data-sender-name="${esc(s.senderName || '')}"
-            >${esc(m.label)}</button>
-          <span class="method-desc">${esc(m.description)}</span>
-        </div>`;
-    }
-    unsubHtml += '</div>';
-  }
-
-  // Disposition HTML — broken down by account/folder with scoped actions
-  let disposeHtml = buildDisposeSection(s, byAccount, total, id);
-
   const cardId = `card-${id}`;
-  const panelId = `panel-${id}`;
 
   return `
 <div class="card" id="${cardId}" data-sender-email="${esc(s.senderEmail)}">
@@ -236,322 +184,153 @@ function buildCard(s) {
   </div>
   <div class="card-actions">
     <button class="btn btn-keep js-keep" data-sender-email="${esc(s.senderEmail)}">Keep</button>
-    <button class="btn btn-unsub js-toggle-panel" data-panel="${panelId}">Unsubscribe</button>
-  </div>
-  <div class="expand-panel" id="${panelId}">
-    <div class="expand-section">
-      <h4>Unsubscribe method</h4>
-      ${unsubHtml}
-    </div>
-    <div class="expand-section">
-      <h4>What to do with existing emails?</h4>
-      ${disposeHtml}
-      <div style="margin-top:8px">
-        <span class="cancel-link js-toggle-panel" data-panel="${panelId}">Cancel</span>
-      </div>
-    </div>
+    <button class="btn btn-unsub js-open-modal" data-sender-email="${esc(s.senderEmail)}">Unsubscribe</button>
   </div>
 </div>`;
 }
 
-function buildDisposeSection(s, byAccount, total, id) {
-  const email = s.senderEmail;
-  const name = s.senderName || '';
-  const accountNames = Object.keys(byAccount);
-  let html = '';
-
-  // Breakdown table
-  html += '<div class="dispose-breakdown">';
-  for (const acct of accountNames) {
-    const folders = byAccount[acct];
-    const folderNames = Object.keys(folders);
-    const acctTotal = Object.values(folders).reduce((a, b) => a + b, 0);
-
-    html += `<div class="dispose-account">`;
-    html += `<div class="dispose-account-header">${esc(acct)} (${acctTotal} emails)</div>`;
-
-    for (const folder of folderNames) {
-      const count = folders[folder];
-      html += `
-        <div class="dispose-folder-row">
-          <span class="dispose-folder-label">${esc(folder)}: ${count} emails</span>
-          <span class="dispose-folder-actions">
-            <button class="btn btn-xs btn-danger js-dispose"
-              data-action="delete" data-scope="folder"
-              data-sender-email="${esc(email)}" data-sender-name="${esc(name)}"
-              data-account="${esc(acct)}" data-folder="${esc(folder)}"
-              data-count="${count}"
-              >Delete</button>
-            <button class="btn btn-xs btn-accent js-dispose"
-              data-action="archive" data-scope="folder"
-              data-sender-email="${esc(email)}" data-sender-name="${esc(name)}"
-              data-account="${esc(acct)}" data-folder="${esc(folder)}"
-              data-count="${count}"
-              >Archive</button>
-          </span>
-        </div>`;
-    }
-
-    // Per-account actions (only if multiple folders)
-    if (folderNames.length > 1) {
-      html += `
-        <div class="dispose-account-actions">
-          <button class="btn btn-xs btn-danger js-dispose"
-            data-action="delete" data-scope="account"
-            data-sender-email="${esc(email)}" data-sender-name="${esc(name)}"
-            data-account="${esc(acct)}" data-folder=""
-            data-count="${acctTotal}"
-            >Delete all ${acctTotal} in ${esc(acct)}</button>
-          <button class="btn btn-xs btn-accent js-dispose"
-            data-action="archive" data-scope="account"
-            data-sender-email="${esc(email)}" data-sender-name="${esc(name)}"
-            data-account="${esc(acct)}" data-folder=""
-            data-count="${acctTotal}"
-            >Archive all ${acctTotal} in ${esc(acct)}</button>
-        </div>`;
-    }
-
-    html += '</div>';
-  }
-  html += '</div>';
-
-  // Global actions (only if multiple accounts or just a nice catch-all)
-  if (total > 0) {
-    html += `
-      <div class="dispose-global">
-        <button class="btn btn-sm btn-danger js-dispose"
-          data-action="delete" data-scope="all"
-          data-sender-email="${esc(email)}" data-sender-name="${esc(name)}"
-          data-account="" data-folder=""
-          data-count="${total}"
-          >Delete all ${total} emails everywhere</button>
-        <button class="btn btn-sm btn-accent js-dispose"
-          data-action="archive" data-scope="all"
-          data-sender-email="${esc(email)}" data-sender-name="${esc(name)}"
-          data-account="" data-folder=""
-          data-count="${total}"
-          >Archive all ${total} emails everywhere</button>
-        <button class="btn btn-sm btn-muted js-dispose-keep"
-          data-sender-email="${esc(email)}"
-          >Keep all emails in place</button>
-      </div>`;
-  }
-
-  return html;
-}
-
-// ── Event delegation ─────────────────────────────────────────────────────────
+// ── Event delegation (attached once in DOMContentLoaded) ─────────────────────
 function attachCardListeners() {
-  const grid = document.getElementById('cards-grid');
-
-  grid.addEventListener('click', async (e) => {
-    const btn = e.target.closest('button, .cancel-link');
+  document.getElementById('cards-grid').addEventListener('click', async (e) => {
+    const btn = e.target.closest('button');
     if (!btn) return;
-
-    if (btn.classList.contains('js-toggle-panel')) {
-      const panel = document.getElementById(btn.dataset.panel);
-      if (panel) panel.classList.toggle('open');
-      return;
-    }
 
     if (btn.classList.contains('js-keep')) {
       await doKeep(btn.dataset.senderEmail);
       return;
     }
 
-    if (btn.classList.contains('js-unsub-method')) {
-      await doUnsubscribe(btn.dataset.method, btn.dataset.url, btn.dataset.senderEmail, btn.dataset.senderName, btn);
-      return;
-    }
-
-    if (btn.classList.contains('js-dispose')) {
-      await doDispose(btn);
-      return;
-    }
-
-    if (btn.classList.contains('js-dispose-keep')) {
-      await doDisposeKeep(btn.dataset.senderEmail);
+    if (btn.classList.contains('js-open-modal')) {
+      openUnsubModal(btn.dataset.senderEmail);
       return;
     }
   });
 }
 
-// ── Unsubscribe actions ──────────────────────────────────────────────────────
-async function doUnsubscribe(method, url, senderEmail, senderName, btn) {
-  const sender = senderName ? `${senderName} <${senderEmail}>` : senderEmail;
+// ── Unsubscribe modal ────────────────────────────────────────────────────────
+let modalSenderEmail = null;
 
-  switch (method) {
-    case 'oneclick': {
-      const ok = confirm(
-        `ONE-CLICK UNSUBSCRIBE\n\n` +
-        `This will send an automatic POST request to unsubscribe from:\n` +
-        `${sender}\n\n` +
-        `URL: ${url}\n\n` +
-        `Proceed?`
-      );
-      if (!ok) return;
+function openUnsubModal(senderEmail) {
+  const sub = subsCache.find(s => s.senderEmail === senderEmail);
+  if (!sub) return;
 
-      btn.disabled = true;
-      btn.textContent = 'Sending...';
-      try {
-        const r = await bg('unsubOneClick', { url });
-        if (r.ok) {
-          toast(`One-click unsubscribe sent to ${senderEmail}`, 'success');
-          btn.textContent = 'Sent';
-        } else {
-          toast(`Server responded with status ${r.status}`, 'error');
-          btn.disabled = false;
-          btn.textContent = 'One-Click Unsubscribe';
-        }
-      } catch (e) {
-        toast('Error: ' + e.message, 'error');
-        btn.disabled = false;
-        btn.textContent = 'One-Click Unsubscribe';
-      }
-      break;
-    }
+  modalSenderEmail = senderEmail;
+  const recipientGroups = getRecipientGroups(sub.messageGroups);
 
-    case 'mail': {
-      let to = url, subject = 'unsubscribe';
-      try {
-        const parsed = new URL(url);
-        to = parsed.pathname;
-        subject = parsed.searchParams.get('subject') || 'unsubscribe';
-      } catch (e) { /* use raw */ }
+  document.getElementById('modal-title').textContent =
+    `Unsubscribe from ${sub.senderName || sub.senderEmail}`;
 
-      const ok = confirm(
-        `SEND UNSUBSCRIBE EMAIL\n\n` +
-        `This will compose and immediately send an email:\n\n` +
-        `To: ${to}\n` +
-        `Subject: ${subject}\n` +
-        `Body: "Please unsubscribe me from your mailing list. Thank you."\n\n` +
-        `The email will be sent immediately from your default identity.\n\n` +
-        `Proceed?`
-      );
-      if (!ok) return;
-
-      btn.disabled = true;
-      btn.textContent = 'Sending...';
-      try {
-        const r = await bg('unsubMail', { url, senderEmail });
-        if (r.ok) {
-          toast(`Unsubscribe email sent to ${r.to}`, 'success');
-          btn.textContent = 'Sent';
-        } else {
-          toast('Failed to send email', 'error');
-          btn.disabled = false;
-          btn.textContent = 'Send Unsubscribe Email';
-        }
-      } catch (e) {
-        toast('Error: ' + e.message, 'error');
-        btn.disabled = false;
-        btn.textContent = 'Send Unsubscribe Email';
-      }
-      break;
-    }
-
-    case 'web': {
-      toast(`Opening unsubscribe page for ${senderEmail}...`, 'info');
-      try { await bg('unsubWeb', { url }); }
-      catch (e) { toast('Error: ' + e.message, 'error'); }
-      break;
-    }
-
-    case 'embedded': {
-      toast(`Opening embedded unsubscribe link for ${senderEmail}...`, 'info');
-      try { await bg('unsubEmbedded', { url }); }
-      catch (e) { toast('Error: ' + e.message, 'error'); }
-      break;
+  const addrEl = document.getElementById('modal-addresses');
+  let html = '';
+  for (const g of recipientGroups) {
+    const m = getBestMethod(g);
+    const methodLabel = m ? METHOD_LABELS[m.type] : 'no method';
+    if (recipientGroups.length === 1) {
+      html += `<div class="modal-addr-row">
+        <span class="modal-addr">${esc(g.recipientAddress || '(unknown)')}</span>
+        <span class="modal-method">${esc(methodLabel)}</span>
+      </div>`;
+    } else {
+      html += `<label class="modal-addr-row">
+        <input type="checkbox" class="modal-addr-check" data-addr="${esc(g.recipientAddress)}" checked>
+        <span class="modal-addr">${esc(g.recipientAddress || '(unknown)')}</span>
+        <span class="modal-method">${esc(methodLabel)}</span>
+      </label>`;
     }
   }
+  if (recipientGroups.length === 0) {
+    html = '<div class="modal-addr-row"><span class="modal-addr" style="color:var(--muted)">No unsubscribe method available</span></div>';
+  }
+  addrEl.innerHTML = html;
+
+  document.querySelector('input[name="dispose"][value="delete"]').checked = true;
+  const confirmBtn = document.getElementById('modal-confirm');
+  confirmBtn.disabled = false;
+  confirmBtn.textContent = 'Unsubscribe';
+
+  document.getElementById('unsub-modal-overlay').classList.add('open');
 }
 
-// ── Disposition actions ──────────────────────────────────────────────────────
-async function doDispose(btn) {
-  const action = btn.dataset.action;     // 'delete' or 'archive'
-  const scope = btn.dataset.scope;       // 'folder', 'account', or 'all'
-  const senderEmail = btn.dataset.senderEmail;
-  const senderName = btn.dataset.senderName;
-  const accountName = btn.dataset.account;
-  const folderName = btn.dataset.folder;
-  const count = btn.dataset.count;
+function closeUnsubModal() {
+  document.getElementById('unsub-modal-overlay').classList.remove('open');
+  modalSenderEmail = null;
+}
 
-  const sender = senderName ? `${senderName} <${senderEmail}>` : senderEmail;
-  const actionVerb = action === 'delete' ? 'Delete' : 'Archive';
-  const actionPast = action === 'delete' ? 'deleted' : 'archived';
-  const dest = action === 'delete' ? 'Trash' : 'Archive';
+async function doUnsubscribeConfirm() {
+  if (!modalSenderEmail) return;
+  const sub = subsCache.find(s => s.senderEmail === modalSenderEmail);
+  if (!sub) return;
 
-  // Build scope description
-  let scopeDesc = '';
-  if (scope === 'folder') {
-    scopeDesc = `in folder "${folderName}" (account: ${accountName})`;
-  } else if (scope === 'account') {
-    scopeDesc = `in account "${accountName}" (all folders)`;
-  } else {
-    scopeDesc = `across ALL accounts and folders`;
+  const recipientGroups = getRecipientGroups(sub.messageGroups);
+  const checkboxes = document.querySelectorAll('.modal-addr-check');
+  const selectedAddrs = checkboxes.length === 0
+    ? recipientGroups.map(g => g.recipientAddress)
+    : [...checkboxes].filter(cb => cb.checked).map(cb => cb.dataset.addr);
+
+  const dispose = document.querySelector('input[name="dispose"]:checked').value;
+
+  const confirmBtn = document.getElementById('modal-confirm');
+  confirmBtn.disabled = true;
+  confirmBtn.textContent = 'Unsubscribing...';
+
+  // Fire unsubscribe for each selected address
+  let succeeded = 0;
+  let failed = 0;
+  for (const addr of selectedAddrs) {
+    const group = recipientGroups.find(g => g.recipientAddress === addr);
+    if (!group) continue;
+    const method = getBestMethod(group);
+    if (!method) continue;
+    try {
+      if (method.type === 'oneclick') {
+        const r = await bg('unsubOneClick', { url: method.url });
+        if (r.ok) succeeded++; else failed++;
+      } else if (method.type === 'mail') {
+        await bg('unsubMail', { url: method.url, senderEmail: modalSenderEmail });
+        succeeded++;
+      } else {
+        await bg('unsubWeb', { url: method.url });
+        succeeded++;
+      }
+    } catch (e) {
+      failed++;
+    }
   }
 
-  const ok = confirm(
-    `${actionVerb.toUpperCase()} EMAILS\n\n` +
-    `${actionVerb} ${count} emails from:\n` +
-    `${sender}\n` +
-    `${scopeDesc}\n\n` +
-    `Emails will be moved to ${dest}.\n\n` +
-    `Are you sure?`
-  );
-  if (!ok) return;
-
-  const command = action === 'delete' ? 'deleteEmails' : 'archiveEmails';
-  toast(`${actionVerb === 'Delete' ? 'Deleting' : 'Archiving'} ${count} emails...`, 'info');
-
-  try {
-    const r = await bg(command, {
-      senderEmail,
-      scope,
-      accountName,
-      folderName
-    });
-    if (r.error) {
-      toast(r.error, 'error');
-      return;
+  // Apply dispose action
+  if (dispose !== 'keep') {
+    try {
+      const command = dispose === 'delete' ? 'deleteEmails' : 'archiveEmails';
+      await bg(command, { senderEmail: modalSenderEmail, scope: 'all', accountName: '', folderName: '' });
+    } catch (e) {
+      toast('Error handling emails: ' + e.message, 'error');
     }
-    const n = r.deleted || r.archived || 0;
-    toast(`${actionPast.charAt(0).toUpperCase() + actionPast.slice(1)} ${n} emails from ${sender}`, 'success');
+  }
+
+  // Mark as unsubscribed
+  try {
+    await bg('decide', { senderEmail: modalSenderEmail, decision: 'unsubscribed', dispose });
   } catch (e) {
     toast('Error: ' + e.message, 'error');
-    return;
   }
 
-  // If scope was 'all', mark as unsubscribed and remove card
-  if (scope === 'all') {
-    await markUnsubscribed(senderEmail, action);
-  } else {
-    // Partial action — reload the card to reflect new counts
-    loadSubs(currentFilter);
-  }
-  loadStats();
-}
-
-async function doDisposeKeep(senderEmail) {
-  await markUnsubscribed(senderEmail, 'keep');
-  loadStats();
-}
-
-async function markUnsubscribed(senderEmail, dispose) {
-  try {
-    await bg('decide', { senderEmail, decision: 'unsubscribed', dispose });
-    toast(`Marked ${senderEmail} as unsubscribed`, 'success');
-  } catch (e) {
-    toast('Error: ' + e.message, 'error');
-    return;
-  }
-
-  const cardId = `card-${sid(senderEmail)}`;
+  // Remove card
+  const cardId = `card-${sid(modalSenderEmail)}`;
   const card = document.getElementById(cardId);
   if (card) {
     card.classList.add('fading');
-    setTimeout(() => { card.remove(); updateCardCount(); }, 300);
+    setTimeout(() => card.remove(), 300);
   }
+
+  const name = sub.senderName || sub.senderEmail;
+  if (failed === 0) {
+    toast(`Unsubscribed from ${name}`, 'success');
+  } else {
+    toast(`Unsubscribed from ${name} (${failed} failed)`, 'error');
+  }
+
+  closeUnsubModal();
+  loadStats();
 }
 
 // ── Keep action ──────────────────────────────────────────────────────────────
@@ -566,7 +345,7 @@ async function doKeep(senderEmail) {
     if (card) {
       if (currentFilter === 'pending' || currentFilter === 'unsubscribed') {
         card.classList.add('fading');
-        setTimeout(() => { card.remove(); updateCardCount(); }, 300);
+        setTimeout(() => card.remove(), 300);
       } else {
         const badgesEl = card.querySelector('.card-badges');
         badgesEl.querySelectorAll('.badge-kept,.badge-unsub').forEach(b => b.remove());
@@ -579,10 +358,6 @@ async function doKeep(senderEmail) {
   }
 }
 
-function updateCardCount() {
-  const cards = document.querySelectorAll('.card');
-  document.getElementById('card-count').textContent = cards.length + ' subscriptions';
-}
 
 // ── Filter ───────────────────────────────────────────────────────────────────
 function setFilter(filter, btn) {
@@ -601,8 +376,14 @@ async function startScan() {
   btn.disabled = true;
   btn.textContent = 'Scanning...';
   document.getElementById('progress-wrap').style.display = 'block';
-  document.getElementById('scan-msg').textContent = 'Starting...';
   document.getElementById('progress-bar').style.width = '0';
+  const msgEl = document.getElementById('scan-msg');
+  msgEl.textContent = 'Starting...';
+  msgEl.classList.remove('wrap');
+  document.getElementById('scan-state-badge').textContent = '';
+  document.getElementById('scan-state-badge').className = '';
+  document.getElementById('scan-stat-emails').textContent = '';
+  document.getElementById('scan-stat-subs').textContent = '';
   document.getElementById('scan-controls').style.display = 'flex';
 
   try {
@@ -623,9 +404,11 @@ function pollScanStatus() {
       const s = await bg('getScanStatus');
       const pct = s.total > 0 ? Math.round(s.progress / s.total * 100) : 0;
       document.getElementById('progress-bar').style.width = pct + '%';
-      const stats = `${(s.messagesScanned || 0).toLocaleString()} emails scanned, ${s.sendersFound || 0} subscriptions found`;
-      const pauseNote = s.paused ? ' (paused)' : '';
-      document.getElementById('scan-msg').textContent = `${s.message || ''}${pauseNote}\n${stats}`;
+
+      const msgEl = document.getElementById('scan-msg');
+      const badgeEl = document.getElementById('scan-state-badge');
+      document.getElementById('scan-stat-emails').textContent = (s.messagesScanned || 0).toLocaleString() + ' emails scanned';
+      document.getElementById('scan-stat-subs').textContent = (s.sendersFound || 0) + ' subscriptions found';
       document.getElementById('pause-btn').textContent = s.paused ? 'Resume' : 'Pause';
 
       if (s.status === 'done' || s.done) {
@@ -638,9 +421,24 @@ function pollScanStatus() {
         document.getElementById('pause-btn').textContent = 'Pause';
         document.getElementById('stop-btn').disabled = false;
         document.getElementById('stop-btn').textContent = 'Stop';
+        msgEl.textContent = s.message || 'Done.';
+        msgEl.classList.add('wrap');
+        badgeEl.textContent = '';
+        badgeEl.className = '';
         loadStats();
         loadSubs(currentFilter);
-        toast('Scan complete! ' + (s.message || ''), 'success');
+        const interrupted = s.message === 'Scan interrupted.';
+        toast(`${s.message} Found ${s.sendersFound || 0} subscriptions.`, interrupted ? 'info' : 'success');
+      } else {
+        msgEl.textContent = s.message || '';
+        msgEl.classList.remove('wrap');
+        if (s.paused) {
+          badgeEl.textContent = 'Paused';
+          badgeEl.className = 'badge-paused';
+        } else {
+          badgeEl.textContent = '';
+          badgeEl.className = '';
+        }
       }
     } catch (e) { /* ignore */ }
   }, 1000);
@@ -649,6 +447,13 @@ function pollScanStatus() {
 // ── Init ─────────────────────────────────────────────────────────────────────
 document.addEventListener('DOMContentLoaded', async () => {
   document.getElementById('scan-btn').addEventListener('click', startScan);
+  attachCardListeners();
+
+  document.getElementById('modal-cancel').addEventListener('click', closeUnsubModal);
+  document.getElementById('modal-confirm').addEventListener('click', doUnsubscribeConfirm);
+  document.getElementById('unsub-modal-overlay').addEventListener('click', (e) => {
+    if (e.target.id === 'unsub-modal-overlay') closeUnsubModal();
+  });
 
   document.getElementById('pause-btn').addEventListener('click', async () => {
     const r = await bg('pauseScan');
@@ -667,7 +472,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   });
 
   await loadStats();
-  await loadSubs('all');
+  await loadSubs('pending');
 
   try {
     const s = await bg('getScanStatus');
@@ -677,6 +482,10 @@ document.addEventListener('DOMContentLoaded', async () => {
       document.getElementById('scan-btn').disabled = true;
       document.getElementById('scan-btn').textContent = 'Scanning...';
       document.getElementById('pause-btn').textContent = s.paused ? 'Resume' : 'Pause';
+      if (s.paused) {
+        document.getElementById('scan-state-badge').textContent = 'Paused';
+        document.getElementById('scan-state-badge').className = 'badge-paused';
+      }
       pollScanStatus();
     }
   } catch (e) { /* ignore */ }

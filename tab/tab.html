@@ -28,16 +28,23 @@
     </div>
     <div class="progress-wrap" id="progress-wrap">
       <div class="progress-bar-outer"><div class="progress-bar-inner" id="progress-bar"></div></div>
-      <div id="scan-msg">Starting...</div>
+      <div class="scan-info-row">
+        <span id="scan-msg">Starting...</span>
+        <span id="scan-state-badge"></span>
+      </div>
+      <div class="scan-stats-row">
+        <span id="scan-stat-emails"></span>
+        <span id="scan-stat-subs"></span>
+      </div>
     </div>
   </div>
 
   <div class="filters-section">
     <h3>Filter</h3>
-    <button class="filter-tab active" data-filter="all">
+    <button class="filter-tab" data-filter="all">
       All <span class="filter-badge" id="fb-all">0</span>
     </button>
-    <button class="filter-tab" data-filter="pending">
+    <button class="filter-tab active" data-filter="pending">
       Pending <span class="filter-badge" id="fb-pending">0</span>
     </button>
     <button class="filter-tab" data-filter="keep">
@@ -51,8 +58,7 @@
 
 <div id="main">
   <div id="main-header">
-    <h2 id="main-title">All Subscriptions</h2>
-    <span id="card-count"></span>
+    <h2 id="main-title">Pending</h2>
   </div>
   <div id="cards-grid">
     <div id="loading"><div class="spinner"></div>Loading...</div>
@@ -61,6 +67,25 @@
     <div class="icon">📭</div>
     <h3>No subscriptions found</h3>
     <p>Run a scan to discover email subscriptions.</p>
+  </div>
+</div>
+
+<div id="unsub-modal-overlay" class="modal-overlay">
+  <div class="modal">
+    <h3 id="modal-title">Unsubscribe</h3>
+    <div id="modal-addresses"></div>
+    <div class="modal-dispose">
+      <h4>What to do with existing emails?</h4>
+      <div class="modal-dispose-options">
+        <label class="dispose-option"><input type="radio" name="dispose" value="delete" checked><span>Delete</span></label>
+        <label class="dispose-option"><input type="radio" name="dispose" value="archive"><span>Archive</span></label>
+        <label class="dispose-option"><input type="radio" name="dispose" value="keep"><span>Keep</span></label>
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button id="modal-cancel" class="btn btn-muted">Cancel</button>
+      <button id="modal-confirm" class="btn btn-danger">Unsubscribe</button>
+    </div>
   </div>
 </div>
 

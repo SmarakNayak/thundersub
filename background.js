@@ -54,6 +54,23 @@ function parseFromHeader(fromVal) {
   return { name: fromVal.trim(), email: '' };
 }
 
+// ── Recipient address extraction ─────────────────────────────────────────────
+function parseRecipientAddress(fullMessage) {
+  // delivered-to is most reliable (added by the receiving mail server per-address)
+  const deliveredTo = fullMessage.headers && fullMessage.headers['delivered-to'];
+  if (deliveredTo && deliveredTo[0]) {
+    const parsed = parseFromHeader(deliveredTo[0].split(',')[0].trim());
+    if (parsed.email) return parsed.email;
+  }
+  // Fall back to To header
+  const to = fullMessage.headers && fullMessage.headers['to'];
+  if (to && to[0]) {
+    const parsed = parseFromHeader(to[0].split(',')[0].trim());
+    if (parsed.email) return parsed.email;
+  }
+  return '';
+}
+
 // ── Embedded unsubscribe link detection ──────────────────────────────────────
 const UNSUB_REGEX = /\bun\W?subscri(?:be|bing|ption)\b/i;
 const URL_REGEX = /https?:\/\/[^\s"'<>]{1,1000}/g;
@@ -165,18 +182,32 @@ async function collectAllFolders(account) {
 // ── Message group helpers ────────────────────────────────────────────────────
 //
 // messageGroups is an array of:
-//   { accountName: string, folderName: string, messageIds: number[] }
+//   { recipientAddress, accountName, folderName, messageIds, unsubUrls, oneClick, hasMailto, hasHttp, embeddedUrl }
 //
-// This replaces the old flat messageIds array so we can delete/archive
-// at folder, account, or global scope.
+// Keyed by (recipientAddress, accountName, folderName) so unsubscribe URLs are
+// correctly scoped to the address that received the email, while delete/archive
+// still operates by account/folder.
 
-function addToMessageGroups(groups, accountName, folderName, msgId) {
-  let group = groups.find(g => g.accountName === accountName && g.folderName === folderName);
+function addToMessageGroups(groups, recipientAddress, accountName, folderName, msgId, unsubData) {
+  let group = groups.find(g =>
+    g.recipientAddress === recipientAddress &&
+    g.accountName === accountName &&
+    g.folderName === folderName
+  );
   if (!group) {
-    group = { accountName, folderName, messageIds: [] };
+    group = { recipientAddress, accountName, folderName, messageIds: [], unsubUrls: [], oneClick: false, hasMailto: false, hasHttp: false, embeddedUrl: null };
     groups.push(group);
   }
   group.messageIds.push(msgId);
+  if (unsubData) {
+    for (const u of (unsubData.urls || [])) {
+      if (!group.unsubUrls.includes(u)) group.unsubUrls.push(u);
+    }
+    if (unsubData.oneClick) group.oneClick = true;
+    if (unsubData.hasMailto) group.hasMailto = true;
+    if (unsubData.hasHttp) group.hasHttp = true;
+    if (unsubData.embeddedUrl && !group.embeddedUrl) group.embeddedUrl = unsubData.embeddedUrl;
+  }
 }
 
 function getIdsForScope(groups, scope, accountName, folderName) {
@@ -235,20 +266,20 @@ async function runScan() {
     for (let i = 0; i < allFolders.length; i++) {
       const { folder, accountName } = allFolders[i];
       scanState.progress = i + 1;
-      scanState.sendersFound = Object.keys(senders).length;
       scanState.message = `Folder ${i + 1} of ${allFolders.length}: ${accountName} | ${folder.name}`;
 
-      // Handle pause/stop
-      while (scanState.paused && !scanState.stopped) {
-        await new Promise(r => setTimeout(r, 200));
-      }
       if (scanState.stopped) break;
 
       try {
         let page = await browser.messages.list(folder);
 
+        pageLoop:
         while (page && page.messages && page.messages.length > 0) {
           for (const m of page.messages) {
+            while (scanState.paused && !scanState.stopped) {
+              await new Promise(r => setTimeout(r, 200));
+            }
+            if (scanState.stopped) break pageLoop;
             try {
               const full = await browser.messages.getFull(m.id);
               if (!full || !full.headers) continue;
@@ -284,11 +315,6 @@ async function runScan() {
                   emailCount: 0,
                   lastDate: '',
                   sampleSubject: '',
-                  unsubUrls: [],
-                  oneClick: false,
-                  hasMailto: false,
-                  hasHttp: false,
-                  embeddedUrl: null,
                   messageGroups: []
                 };
               }
@@ -300,15 +326,11 @@ async function runScan() {
                 s.lastDate = dateStr;
                 s.sampleSubject = m.subject || '';
               }
-              for (const u of urls) {
-                if (!s.unsubUrls.includes(u)) s.unsubUrls.push(u);
-              }
-              if (oneClick) s.oneClick = true;
-              if (hasMailto) s.hasMailto = true;
-              if (hasHttp) s.hasHttp = true;
-              if (embeddedUrl && !s.embeddedUrl) s.embeddedUrl = embeddedUrl;
-              addToMessageGroups(s.messageGroups, accountName, folder.name, m.id);
               if (name && !s.senderName) s.senderName = name;
+              const recipientAddress = parseRecipientAddress(full);
+              addToMessageGroups(s.messageGroups, recipientAddress, accountName, folder.name, m.id,
+                { urls, oneClick, hasMailto, hasHttp, embeddedUrl });
+              scanState.sendersFound = Object.keys(senders).length;
             } catch (e) {
               // Skip individual messages that fail
             }
@@ -351,11 +373,11 @@ async function runScan() {
         emailCount: s.emailCount,
         lastDate: s.lastDate,
         sampleSubject: s.sampleSubject,
-        unsubUrls: s.unsubUrls,
-        oneClick: s.oneClick,
-        hasMailto: s.hasMailto,
-        hasHttp: s.hasHttp,
-        embeddedUrl: s.embeddedUrl,
+        // Derived aggregate fields for quick badge/display access
+        oneClick: cappedGroups.some(g => g.oneClick),
+        hasMailto: cappedGroups.some(g => g.hasMailto),
+        hasHttp: cappedGroups.some(g => g.hasHttp),
+        hasEmbedded: cappedGroups.some(g => !!g.embeddedUrl),
         messageGroups: cappedGroups,
         decision: (prev && (prev.decision === 'keep' || prev.decision === 'unsubscribed'))
           ? prev.decision : 'pending',
@@ -382,9 +404,7 @@ async function runScan() {
       total: allFolders.length,
       messagesScanned: finalMessagesScanned,
       sendersFound: finalSendersFound,
-      message: wasStopped
-        ? `Stopped. Found ${finalSendersFound} subscriptions so far.`
-        : `Done. Found ${finalSendersFound} subscriptions with unsubscribe options.`,
+      message: wasStopped ? 'Scan interrupted.' : 'Scan complete.',
       done: true,
       paused: false,
       stopped: false
