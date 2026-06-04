@@ -597,18 +597,18 @@ async function doUnsubscribeConfirm() {
     if (dispose === 'move' && selectedFolders.length > 0 && !destination) {
       toast('Select a destination folder', 'info');
       confirmBtn.disabled = false;
-      confirmBtn.textContent = 'Unsubscribe';
+      confirmBtn.textContent = modalMode === 'cleanup' ? 'Apply' : 'Unsubscribe';
       return;
     }
     if (destination?.disabled) {
       toast('Select an available destination folder', 'info');
       confirmBtn.disabled = false;
-      confirmBtn.textContent = 'Unsubscribe';
+      confirmBtn.textContent = modalMode === 'cleanup' ? 'Apply' : 'Unsubscribe';
       return;
     }
     toast(dryRunSummary(sub, method, dispose, selectedFolders, destination), 'info');
     confirmBtn.disabled = false;
-    confirmBtn.textContent = 'Unsubscribe';
+    confirmBtn.textContent = modalMode === 'cleanup' ? 'Apply' : 'Unsubscribe';
     closeUnsubModal();
     return;
   }
