@@ -538,6 +538,12 @@ async function runScan() {
     for (const [key, s] of Object.entries(subs)) {
       const prev = existingMap[key];
 
+      // A rescan re-evaluates everything, so prior errors are cleared: only
+      // 'keep'/'unsubscribed' decisions (and their dispose state) carry over.
+      const decision = (prev && (prev.decision === 'keep' || prev.decision === 'unsubscribed'))
+        ? prev.decision : 'pending';
+      const carryPrevState = !!prev && decision === prev.decision;
+
       merged.push({
         senderEmail: s.senderEmail,
         senderName: s.senderName,
@@ -553,18 +559,17 @@ async function runScan() {
         embeddedUrl: s.embeddedUrl,
         _nameFreqs: s._nameFreqs,
         messageGroups: s.messageGroups,
-        decision: (prev && (prev.decision === 'keep' || prev.decision === 'unsubscribed' || prev.decision === 'error'))
-          ? prev.decision : 'pending',
-        dispose: prev ? prev.dispose : null,
-        cleanupDestination: prev ? prev.cleanupDestination : null,
-        error: prev ? prev.error : null,
+        decision,
+        dispose: carryPrevState ? prev.dispose : null,
+        cleanupDestination: carryPrevState ? prev.cleanupDestination : null,
+        error: carryPrevState ? prev.error : null,
         updatedAt: now
       });
     }
 
     for (const prev of existing) {
       const k = `${prev.senderEmail}|${prev.recipientAddress || ''}`;
-      if (!subs[k] && (prev.decision === 'keep' || prev.decision === 'unsubscribed' || prev.decision === 'error')) {
+      if (!subs[k] && (prev.decision === 'keep' || prev.decision === 'unsubscribed')) {
         merged.push(prev);
       }
     }
