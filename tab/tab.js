@@ -159,7 +159,24 @@ async function loadStats() {
     document.getElementById('fb-error').textContent = s.error || 0;
     hasScannedBefore = s.total > 0;
     refreshScanButtonLabel();
+    const lastEl = document.getElementById('scan-last');
+    if (lastEl) {
+      lastEl.textContent = s.lastScanAt ? `Last scanned ${formatLastScan(s.lastScanAt)}` : '';
+    }
   } catch (e) { /* ignore */ }
+}
+
+function formatLastScan(iso) {
+  const d = new Date(iso);
+  if (isNaN(d)) return '';
+  const diffMs = Date.now() - d.getTime();
+  const mins = Math.round(diffMs / 60000);
+  if (mins < 1) return 'just now';
+  if (mins < 60) return `${mins} min ago`;
+  const hours = Math.round(mins / 60);
+  if (hours < 24) return `${hours} hr ago`;
+  return d.toLocaleDateString([], { month: 'short', day: 'numeric' }) +
+    ' at ' + d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
 }
 
 // ── Subscriptions loading ────────────────────────────────────────────────────
