@@ -5,6 +5,16 @@ let scanPollTimer = null;
 let subsCache = [];
 let dryRun = true;
 let autoSendUnsubscribeEmails = false;
+let hasScannedBefore = false;
+
+// The scan button reads "Rescan Emails" once a scan has produced data, else
+// "Scan Emails". Only touches the label while the button is idle so it never
+// clobbers "Scanning..." mid-scan.
+function refreshScanButtonLabel() {
+  const btn = document.getElementById('scan-btn');
+  if (!btn || btn.disabled) return;
+  btn.textContent = hasScannedBefore ? 'Rescan Emails' : 'Scan Emails';
+}
 
 // ── Utils ────────────────────────────────────────────────────────────────────
 function esc(s) {
@@ -113,7 +123,8 @@ async function doFullReset() {
     document.getElementById('progress-wrap').style.display = 'none';
     document.getElementById('scan-controls').style.display = 'none';
     document.getElementById('scan-btn').disabled = false;
-    document.getElementById('scan-btn').textContent = 'Scan Emails';
+    hasScannedBefore = false;
+    refreshScanButtonLabel();
     document.getElementById('pause-btn').textContent = 'Pause';
     document.getElementById('stop-btn').disabled = false;
     document.getElementById('stop-btn').textContent = 'Stop';
@@ -146,6 +157,8 @@ async function loadStats() {
     document.getElementById('fb-keep').textContent = s.kept;
     document.getElementById('fb-unsubscribed').textContent = s.unsubscribed;
     document.getElementById('fb-error').textContent = s.error || 0;
+    hasScannedBefore = s.total > 0;
+    refreshScanButtonLabel();
   } catch (e) { /* ignore */ }
 }
 
@@ -927,7 +940,7 @@ async function startScan() {
   } catch (e) {
     toast('Failed to start scan: ' + e.message, 'error');
     btn.disabled = false;
-    btn.textContent = 'Scan Emails';
+    refreshScanButtonLabel();
     document.getElementById('scan-controls').style.display = 'none';
   }
 }
@@ -950,7 +963,8 @@ function pollScanStatus() {
         clearInterval(scanPollTimer);
         scanPollTimer = null;
         document.getElementById('scan-btn').disabled = false;
-        document.getElementById('scan-btn').textContent = 'Scan Emails';
+        hasScannedBefore = true;
+        refreshScanButtonLabel();
         document.getElementById('progress-bar').style.width = '100%';
         document.getElementById('scan-controls').style.display = 'none';
         document.getElementById('pause-btn').textContent = 'Pause';
