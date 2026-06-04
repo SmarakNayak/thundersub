@@ -34,6 +34,25 @@ async function setDryRun(dryRun) {
   return { dryRun: enabled };
 }
 
+async function fullReset() {
+  if (scanState.status === 'scanning') {
+    throw new Error('Stop the active scan before running a full reset.');
+  }
+  await browser.storage.local.remove('subscriptions');
+  scanState = {
+    status: 'idle',
+    progress: 0,
+    total: 0,
+    messagesScanned: 0,
+    sendersFound: 0,
+    message: '',
+    done: false,
+    paused: false,
+    stopped: false
+  };
+  return { ok: true };
+}
+
 // ── Parsing helpers ──────────────────────────────────────────────────────────
 function extractUnsubUrls(raw) {
   if (!raw) return [];
@@ -494,7 +513,7 @@ async function runScan() {
 
     for (const prev of existing) {
       const k = `${prev.senderEmail}|${prev.recipientAddress || ''}`;
-      if (!subs[k]) {
+      if (!subs[k] && (prev.decision === 'keep' || prev.decision === 'unsubscribed' || prev.decision === 'error')) {
         merged.push(prev);
       }
     }
@@ -706,7 +725,7 @@ async function dryRunDeleteEmails(senderEmail, recipientAddress, selectedFolders
 
   const ids = getIdsForFolders(sub.messageGroups, selectedFolders);
   const folderDesc = selectedFolders && selectedFolders.length
-    ? selectedFolders.map(f => `${f.accountName}/${f.folderName}`).join(', ')
+    ? selectedFolders.map(f => `${f.accountName} | ${f.folderName}`).join(', ')
     : 'all';
   console.log(`[DRY RUN] Would DELETE ${ids.length} emails from ${sub.senderName || ''} <${senderEmail}> → ${recipientAddress} | folders=${folderDesc}`);
 
@@ -722,7 +741,7 @@ async function dryRunMoveEmails(senderEmail, recipientAddress, selectedFolders, 
 
   const ids = getIdsForFolders(sub.messageGroups, selectedFolders);
   const folderDesc = selectedFolders && selectedFolders.length
-    ? selectedFolders.map(f => `${f.accountName}/${f.folderName}`).join(', ')
+    ? selectedFolders.map(f => `${f.accountName} | ${f.folderName}`).join(', ')
     : 'all';
   const destinationLabel = destinationMeta?.label || destinationFolderId;
   console.log(`[DRY RUN] Would MOVE ${ids.length} emails from ${sub.senderName || ''} <${senderEmail}> → ${recipientAddress} | folders=${folderDesc} → dest=${destinationLabel}`);
@@ -840,6 +859,9 @@ browser.runtime.onMessage.addListener((request, sender) => {
 
     case 'setDryRun':
       return setDryRun(request.dryRun);
+
+    case 'fullReset':
+      return fullReset();
 
     case 'decide':
       return setDecision(request.senderEmail, request.recipientAddress, request.decision, request.dispose, request.cleanupDestination, request.error)

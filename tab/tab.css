@@ -76,6 +76,17 @@ body{display:flex;overflow:hidden}
 }
 .filter-tab.active .filter-badge{background:rgba(99,102,241,.25);color:var(--accent)}
 
+.sidebar-footer{
+  margin-top:auto;padding:16px 20px 0;border-top:1px solid var(--border);
+}
+.sidebar-footer h3{font-size:11px;text-transform:uppercase;letter-spacing:.08em;color:var(--muted);margin-bottom:12px}
+#full-reset-btn{
+  width:100%;margin-top:10px;padding:9px 10px;border:1px solid rgba(239,68,68,.45);
+  border-radius:8px;background:rgba(239,68,68,.1);color:#fecaca;
+  font-size:12px;font-weight:700;cursor:pointer;transition:background .15s,border-color .15s;
+}
+#full-reset-btn:hover{background:rgba(239,68,68,.18);border-color:rgba(239,68,68,.65)}
+
 /* Main */
 #main{flex:1;height:100vh;overflow-y:auto;padding:24px}
 #main-header{margin-bottom:20px;display:flex;align-items:center;justify-content:space-between}

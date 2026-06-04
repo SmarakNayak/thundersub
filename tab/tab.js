@@ -19,7 +19,7 @@ function toast(msg, type = 'info') {
   setTimeout(() => {
     el.style.animation = 'fadeOut .3s ease forwards';
     setTimeout(() => el.remove(), 300);
-  }, 3500);
+  }, 6000);
 }
 
 function bg(command, data) {
@@ -73,6 +73,39 @@ async function updateDryRun(enabled) {
   }
 }
 
+async function doFullReset() {
+  const confirmed = confirm('Full reset clears saved scan results and subscription decisions. It does not delete, move, or send emails. Continue?');
+  if (!confirmed) return;
+
+  const btn = document.getElementById('full-reset-btn');
+  btn.disabled = true;
+  btn.textContent = 'Resetting...';
+
+  try {
+    await bg('fullReset');
+    document.getElementById('progress-wrap').style.display = 'none';
+    document.getElementById('scan-controls').style.display = 'none';
+    document.getElementById('scan-btn').disabled = false;
+    document.getElementById('scan-btn').textContent = 'Scan Emails';
+    document.getElementById('pause-btn').textContent = 'Pause';
+    document.getElementById('stop-btn').disabled = false;
+    document.getElementById('stop-btn').textContent = 'Stop';
+
+    currentFilter = 'pending';
+    document.querySelectorAll('.filter-tab').forEach(t => t.classList.remove('active'));
+    document.querySelector('.filter-tab[data-filter="pending"]')?.classList.add('active');
+    document.getElementById('main-title').textContent = 'Pending';
+    await loadStats();
+    await loadSubs('pending');
+    toast('Full reset complete', 'success');
+  } catch (e) {
+    toast('Full reset failed: ' + (e.message || e), 'error');
+  } finally {
+    btn.disabled = false;
+    btn.textContent = 'Full Reset';
+  }
+}
+
 async function loadStats() {
   try {
     const s = await bg('getStats');
@@ -81,7 +114,6 @@ async function loadStats() {
     document.getElementById('stat-kept').textContent = s.kept;
     document.getElementById('stat-unsub').textContent = s.unsubscribed;
     document.getElementById('stat-error').textContent = s.error || 0;
-    document.getElementById('fb-all').textContent = s.total;
     document.getElementById('fb-pending').textContent = s.pending;
     document.getElementById('fb-keep').textContent = s.kept;
     document.getElementById('fb-unsubscribed').textContent = s.unsubscribed;
@@ -157,7 +189,7 @@ function buildActions(s) {
   if (s.decision === 'keep') {
     return `
     <button class="btn btn-view js-view" ${attrs}>View</button>
-    <button class="btn btn-keep js-unkeep" ${attrs}>Unkeep</button>`;
+    <button class="btn btn-keep js-unkeep" title="Move this subscription back to Pending for review." ${attrs}>Review Again</button>`;
   }
 
   if (s.decision === 'unsubscribed') {
@@ -302,7 +334,7 @@ function renderModalSourceFolders(sub) {
     foldersEl.innerHTML = groups.map((g, i) => `
       <label class="modal-folder-row">
         <input type="checkbox" class="modal-folder-check" data-idx="${i}" checked>
-        <span class="modal-folder-name">${esc(g.accountName)} / ${esc(g.folderName)}</span>
+        <span class="modal-folder-name">${esc(g.accountName)} | ${esc(g.folderName)}</span>
         <span class="modal-folder-count">${g.messageIds.length}</span>
       </label>`).join('');
   }
@@ -517,12 +549,13 @@ function getSelectedDestination() {
   const accountName = accountEl ? accountEl.textContent.trim() : '';
   const folderName = radio.dataset.folderName || radio.value;
   const folderPath = radio.dataset.folderPath || folderName;
+  const folderLabel = displayFolderPath(folderPath, folderName);
   return {
     id: radio.value,
     accountName,
     folderName,
     folderPath,
-    label: accountName ? `${accountName} / ${folderPath}` : folderPath,
+    label: accountName ? `${accountName} | ${folderLabel}` : folderLabel,
     disabled: radio.disabled
   };
 }
@@ -539,6 +572,10 @@ function selectedMessageCount(sub, selectedFolders) {
         : f.accountName === g.accountName && f.folderName === g.folderName
     )))
     .reduce((sum, g) => sum + g.messageIds.length, 0);
+}
+
+function displayFolderPath(path, fallback) {
+  return String(path || fallback || '').replace(/^\/+/, '');
 }
 
 function dryRunSummary(sub, method, dispose, selectedFolders, destination) {
@@ -814,7 +851,7 @@ function setFilter(filter, btn) {
   document.querySelectorAll('.filter-tab').forEach(t => t.classList.remove('active'));
   btn.classList.add('active');
 
-  const titles = { all: 'All Subscriptions', pending: 'Pending', keep: 'Kept', unsubscribed: 'Unsubscribed', error: 'Errors' };
+  const titles = { pending: 'Pending', keep: 'Kept', unsubscribed: 'Unsubscribed', error: 'Errors' };
   document.getElementById('main-title').textContent = titles[filter] || filter;
   loadSubs(filter);
 }
@@ -899,6 +936,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   document.getElementById('dry-run-toggle').addEventListener('change', (e) => {
     updateDryRun(e.target.checked);
   });
+  document.getElementById('full-reset-btn').addEventListener('click', doFullReset);
   attachCardListeners();
 
   document.getElementById('modal-cancel').addEventListener('click', closeUnsubModal);

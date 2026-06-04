@@ -23,13 +23,6 @@
   <div class="scan-section">
     <h3>Scanner</h3>
     <button id="scan-btn">Scan Emails</button>
-    <label class="dry-run-toggle">
-      <span>
-        <strong>Dry run</strong>
-        <small>No emails are deleted or moved</small>
-      </span>
-      <input type="checkbox" id="dry-run-toggle" checked>
-    </label>
     <div class="scan-controls" id="scan-controls">
       <button id="pause-btn">Pause</button>
       <button id="stop-btn">Stop</button>
@@ -49,9 +42,6 @@
 
   <div class="filters-section">
     <h3>Filter</h3>
-    <button class="filter-tab" data-filter="all">
-      All <span class="filter-badge" id="fb-all">0</span>
-    </button>
     <button class="filter-tab active" data-filter="pending">
       Pending <span class="filter-badge" id="fb-pending">0</span>
     </button>
@@ -64,6 +54,18 @@
     <button class="filter-tab" data-filter="error">
       Errors <span class="filter-badge" id="fb-error">0</span>
     </button>
+  </div>
+
+  <div class="sidebar-footer">
+    <h3>Advanced Settings</h3>
+    <label class="dry-run-toggle">
+      <span>
+        <strong>Dry Run</strong>
+        <small>No subscriptions are deleted, moved or unsubscribed from</small>
+      </span>
+      <input type="checkbox" id="dry-run-toggle" checked>
+    </label>
+    <button id="full-reset-btn">Full Reset</button>
   </div>
 </div>
 
