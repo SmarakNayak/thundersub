@@ -573,6 +573,7 @@ async function runScan() {
         dispose: carryPrevState ? prev.dispose : null,
         cleanupDestination: carryPrevState ? prev.cleanupDestination : null,
         error: carryPrevState ? prev.error : null,
+        dismissed: carryPrevState ? !!prev.dismissed : false,
         updatedAt: now
       });
     }
@@ -778,7 +779,7 @@ async function setDecision(senderEmail, recipientAddress, decision, dispose, cle
 }
 
 async function getStats() {
-  const subs = await loadSubscriptions();
+  const subs = (await loadSubscriptions()).filter(s => !s.dismissed);
   const lastScan = await getLastScan();
   return {
     total: subs.length,
@@ -792,13 +793,22 @@ async function getStats() {
 }
 
 async function getSubscriptions(filter) {
-  const subs = await loadSubscriptions();
+  const subs = (await loadSubscriptions()).filter(s => !s.dismissed);
   let filtered = subs;
   if (filter && filter !== 'all') {
     filtered = subs.filter(s => s.decision === filter);
   }
   filtered.sort((a, b) => b.emailCount - a.emailCount);
   return filtered;
+}
+
+async function dismissSubscription(senderEmail, recipientAddress) {
+  const subs = await loadSubscriptions();
+  const sub = subs.find(s => s.senderEmail === senderEmail && s.recipientAddress === recipientAddress);
+  if (!sub) throw new Error('Subscription not found');
+  sub.dismissed = true;
+  sub.updatedAt = new Date().toISOString();
+  await saveSubscriptions(subs);
 }
 
 // ── Dry-run functions for delete/move (no Thunderbird messages touched) ──────
@@ -958,6 +968,10 @@ browser.runtime.onMessage.addListener((request, sender) => {
 
     case 'decide':
       return setDecision(request.senderEmail, request.recipientAddress, request.decision, request.dispose, request.cleanupDestination, request.error)
+        .then(() => ({ ok: true }));
+
+    case 'dismiss':
+      return dismissSubscription(request.senderEmail, request.recipientAddress)
         .then(() => ({ ok: true }));
 
     case 'deleteEmails':

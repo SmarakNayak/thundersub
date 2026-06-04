@@ -6,6 +6,7 @@ let subsCache = [];
 let dryRun = true;
 let autoSendUnsubscribeEmails = false;
 let hasScannedBefore = false;
+let scanInProgress = false;
 
 // The scan button reads "Rescan Emails" once a scan has produced data, else
 // "Scan Emails". Only touches the label while the button is idle so it never
@@ -161,7 +162,7 @@ async function loadStats() {
     refreshScanButtonLabel();
     const lastEl = document.getElementById('scan-last');
     if (lastEl) {
-      lastEl.textContent = s.lastScanAt ? `Last scanned ${formatLastScan(s.lastScanAt)}` : '';
+      lastEl.textContent = (!scanInProgress && s.lastScanAt) ? `Last scanned ${formatLastScan(s.lastScanAt)}` : '';
     }
   } catch (e) { /* ignore */ }
 }
@@ -228,6 +229,27 @@ function totalCount(messageGroups) {
 const METHOD_LABELS = { oneclick: 'one-click', mail: 'email', web: 'browser', embedded: 'embedded link' };
 const DISPOSE_LABELS = { delete: 'Deleted emails', move: 'Moved emails', keep: 'Left emails' };
 
+// Full, human-readable description of how the unsubscribe will be performed,
+// including the destination website (for link methods) or address (for email).
+// Shown on hover so the modal stays uncluttered.
+function methodDetail(method) {
+  if (!method) return 'No unsubscribe method was detected for this sender.';
+  switch (method.type) {
+    case 'oneclick':
+      return `One-click unsubscribe\nSends a secure POST request to:\n${method.url}`;
+    case 'web':
+      return `Browser unsubscribe\nOpens this page in your browser:\n${method.url}`;
+    case 'embedded':
+      return `Embedded link\nOpens this link from the email body:\n${method.url}`;
+    case 'mail': {
+      const addr = method.url.replace(/^mailto:/i, '').split('?')[0];
+      return `Email unsubscribe\nSends an unsubscribe email to:\n${addr}`;
+    }
+    default:
+      return method.url || '';
+  }
+}
+
 function getBestMethod(sub) {
   const urls = sub.unsubUrls || [];
   const httpUrl = urls.find(u => u.startsWith('http')) || '';
@@ -251,16 +273,22 @@ function buildActions(s) {
   }
 
   if (s.decision === 'unsubscribed') {
+    const dismissBtn = `<button class="btn btn-muted js-dismiss" title="Remove this subscription from the list." ${attrs}>Dismiss</button>`;
     if (s.dispose === 'delete') {
-      return '<span class="action-note">No remaining email actions</span>';
+      return `
+      <span class="action-note">No remaining email actions</span>
+      ${dismissBtn}`;
     }
     if (hasMessages) {
       return `
       <button class="btn btn-view js-view" ${attrs}>View</button>
       <button class="btn btn-outline js-cleanup-move" ${attrs}>Move</button>
-      <button class="btn btn-danger js-cleanup-delete" ${attrs}>Delete</button>`;
+      <button class="btn btn-danger js-cleanup-delete" ${attrs}>Delete</button>
+      ${dismissBtn}`;
     }
-    return '<span class="action-note">Run a scan to manage remaining emails</span>';
+    return `
+    <span class="action-note">Run a scan to manage remaining emails</span>
+    ${dismissBtn}`;
   }
 
   if (s.decision === 'error') {
@@ -295,10 +323,6 @@ function buildCard(s) {
 
   // Badges
   let badges = `<span class="badge badge-blue">${s.emailCount} emails</span>`;
-  if (s.oneClick) badges += `<span class="badge badge-green">One-Click</span>`;
-  if (s.hasMailto) badges += `<span class="badge badge-purple">Mailto</span>`;
-  if (s.hasHttp && !s.oneClick) badges += `<span class="badge badge-orange">HTTP</span>`;
-  if (s.hasEmbedded && !s.hasHttp && !s.hasMailto && !s.oneClick) badges += `<span class="badge badge-orange">Embedded</span>`;
   if (s.decision === 'keep') badges += `<span class="badge badge-kept">Kept</span>`;
   if (s.decision === 'unsubscribed') {
     badges += `<span class="badge badge-unsub">Unsubscribed</span>`;
@@ -374,7 +398,22 @@ function attachCardListeners() {
       openCleanupModal(btn.dataset.senderEmail, btn.dataset.recipientAddress, 'move');
       return;
     }
+
+    if (btn.classList.contains('js-dismiss')) {
+      await doDismiss(btn.dataset.senderEmail, btn.dataset.recipientAddress);
+      return;
+    }
   });
+}
+
+async function doDismiss(senderEmail, recipientAddress) {
+  try {
+    await bg('dismiss', { senderEmail, recipientAddress });
+    loadStats();
+    loadSubs(currentFilter);
+  } catch (e) {
+    toast('Failed to dismiss: ' + (e.message || e), 'error');
+  }
 }
 
 // ── Unsubscribe modal ────────────────────────────────────────────────────────
@@ -411,17 +450,29 @@ function openUnsubModal(senderEmail, recipientAddress) {
   cleanupDefaultAction = null;
 
   const method = getBestMethod(sub);
-  const methodLabel = method ? METHOD_LABELS[method.type] : 'no method';
+  const methodLabel = method ? METHOD_LABELS[method.type] : 'none';
+  const detail = methodDetail(method);
 
   document.getElementById('modal-title').textContent =
     `Unsubscribe from ${sub.senderName || sub.senderEmail}`;
 
-  // Recipient address
+  // account / via rows. The method badge reveals the full destination on hover.
   const addrEl = document.getElementById('modal-addresses');
-  addrEl.innerHTML = `<div class="modal-addr-row">
-    <span class="modal-addr">${esc(recipientAddress || '(unknown)')}</span>
-    <span class="modal-method">${esc(methodLabel)}</span>
-  </div>`;
+  addrEl.innerHTML = `
+    <div class="modal-addr-row modal-addr-box">
+      <div class="modal-kv">
+        <span class="modal-kv-label">From:</span>
+        <span class="modal-addr">${esc(sub.senderEmail)}</span>
+      </div>
+      <div class="modal-kv">
+        <span class="modal-kv-label">To:</span>
+        <span class="modal-addr">${esc(recipientAddress || '(unknown)')}</span>
+      </div>
+      <div class="modal-kv">
+        <span class="modal-kv-label">Via:</span>
+        <span class="modal-method has-detail" title="${esc(detail)}">${esc(methodLabel)}</span>
+      </div>
+    </div>`;
 
   renderModalSourceFolders(sub);
   document.querySelector('.modal-dispose h4').textContent = 'What to do with existing emails?';
@@ -435,6 +486,7 @@ function openUnsubModal(senderEmail, recipientAddress) {
   const confirmBtn = document.getElementById('modal-confirm');
   confirmBtn.disabled = false;
   confirmBtn.textContent = 'Unsubscribe';
+  confirmBtn.title = detail;
 
   document.getElementById('unsub-modal-overlay').classList.add('open');
 }
@@ -450,10 +502,21 @@ function openCleanupModal(senderEmail, recipientAddress, action) {
 
   document.getElementById('modal-title').textContent =
     `Manage emails from ${sub.senderName || sub.senderEmail}`;
-  document.getElementById('modal-addresses').innerHTML = `<div class="modal-addr-row">
-    <span class="modal-addr">${esc(recipientAddress || '(unknown)')}</span>
-    <span class="modal-method">already unsubscribed</span>
-  </div>`;
+  document.getElementById('modal-addresses').innerHTML = `
+    <div class="modal-addr-row modal-addr-box">
+      <div class="modal-kv">
+        <span class="modal-kv-label">From:</span>
+        <span class="modal-addr">${esc(sub.senderEmail)}</span>
+      </div>
+      <div class="modal-kv">
+        <span class="modal-kv-label">To:</span>
+        <span class="modal-addr">${esc(recipientAddress || '(unknown)')}</span>
+      </div>
+      <div class="modal-kv">
+        <span class="modal-kv-label">Status:</span>
+        <span class="modal-method">already unsubscribed</span>
+      </div>
+    </div>`;
 
   renderModalSourceFolders(sub);
   document.querySelector('.modal-dispose h4').textContent = 'Email action';
@@ -465,6 +528,7 @@ function openCleanupModal(senderEmail, recipientAddress, action) {
   const confirmBtn = document.getElementById('modal-confirm');
   confirmBtn.disabled = false;
   confirmBtn.textContent = 'Apply';
+  confirmBtn.title = '';
 
   document.getElementById('unsub-modal-overlay').classList.add('open');
   onDisposeChange();
@@ -940,6 +1004,8 @@ async function startScan() {
   const btn = document.getElementById('scan-btn');
   btn.disabled = true;
   btn.textContent = 'Scanning...';
+  scanInProgress = true;
+  document.getElementById('scan-last').textContent = '';
   document.getElementById('progress-wrap').style.display = 'block';
   document.getElementById('progress-bar').style.width = '0';
   const msgEl = document.getElementById('scan-msg');
@@ -956,6 +1022,7 @@ async function startScan() {
     pollScanStatus();
   } catch (e) {
     toast('Failed to start scan: ' + e.message, 'error');
+    scanInProgress = false;
     btn.disabled = false;
     refreshScanButtonLabel();
     document.getElementById('scan-controls').style.display = 'none';
@@ -979,6 +1046,7 @@ function pollScanStatus() {
       if (s.status === 'done' || s.done) {
         clearInterval(scanPollTimer);
         scanPollTimer = null;
+        scanInProgress = false;
         document.getElementById('scan-btn').disabled = false;
         hasScannedBefore = true;
         refreshScanButtonLabel();
@@ -1080,6 +1148,8 @@ document.addEventListener('DOMContentLoaded', async () => {
   try {
     const s = await bg('getScanStatus');
     if (s.status === 'scanning') {
+      scanInProgress = true;
+      document.getElementById('scan-last').textContent = '';
       document.getElementById('progress-wrap').style.display = 'block';
       document.getElementById('scan-controls').style.display = 'flex';
       document.getElementById('scan-btn').disabled = true;
