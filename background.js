@@ -244,46 +244,6 @@ function addToMessageGroups(groups, accountName, folderName, folderId, msgId, he
   }
 }
 
-async function logScanMessageIdMismatch(folder, accountName, listedMessage, headerMessageId, full) {
-  if (!headerMessageId) return;
-
-  try {
-    const found = await queryByHeaderMessageId(folder.id, headerMessageId);
-    const foundIds = found.map(m => m.id);
-    if (foundIds.length > 0 && !foundIds.includes(listedMessage.id)) {
-      console.warn('[ThunderSub][scan] MessageId mismatch before storage', {
-        accountName,
-        folderName: folder.name,
-        folderId: folder.id,
-        listedMessageId: listedMessage.id,
-        listedHeaderMessageId: listedMessage.headerMessageId || null,
-        fullHeaderMessageId: headerMessageId,
-        queryFoundIds: foundIds,
-        queryFoundMessages: found.map(m => ({
-          id: m.id,
-          author: m.author || '',
-          subject: m.subject || '',
-          date: m.date || '',
-          folderId: m.folder?.id || null,
-          folderName: m.folder?.name || null
-        })),
-        listedSubject: listedMessage.subject || '',
-        listedAuthor: listedMessage.author || '',
-        fullHeaderKeys: full && full.headers ? Object.keys(full.headers).slice(0, 20) : []
-      });
-    }
-  } catch (e) {
-    console.warn('[ThunderSub][scan] MessageId verification failed', {
-      accountName,
-      folderName: folder.name,
-      folderId: folder.id,
-      listedMessageId: listedMessage.id,
-      headerMessageId,
-      error: e && e.message ? e.message : String(e)
-    });
-  }
-}
-
 function folderMatchesSelection(group, selectedFolder) {
   if (group.folderId && selectedFolder.folderId) return group.folderId === selectedFolder.folderId;
   return selectedFolder.accountName === group.accountName && selectedFolder.folderName === group.folderName;
@@ -530,7 +490,6 @@ async function runScan() {
               if (embeddedUrl && !s.embeddedUrl) s.embeddedUrl = embeddedUrl;
 
               const headerMessageId = normalizeHeaderMessageId(m.headerMessageId || full.headers['message-id']);
-              await logScanMessageIdMismatch(folder, accountName, m, headerMessageId, full);
               addToMessageGroups(s.messageGroups, accountName, folder.name, folder.id, m.id, headerMessageId);
               scanState.sendersFound = Object.keys(subs).length;
             } catch (e) {
