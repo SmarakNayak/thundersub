@@ -1,12 +1,22 @@
 # ThunderSub — TODO
 
-## Open
-1. **Retry on Unsubscribed/Errors tiles?** Should we add an explicit Retry
-   action, or is "Review Again" (back to Pending → Unsubscribe) good enough?
-2. **Unsubscribe method as a dropdown?** Make the method a dropdown of all
-   available methods for a sender (one-click / email / browser / embedded)
-   instead of auto-picking the "best" one. If so, does it belong in every modal
-   or only the retry modal?
+## Open / planned
+1. **Retry on Error tiles + move Dismiss to a garbage-can icon.**
+   - Add a **Retry** action to Error tiles that re-opens the unsubscribe modal
+     in place (no Pending round-trip).
+   - Move **Dismiss** out of the button row into a **garbage-can icon top-right**
+     of the tile (for dismissable tiles: Unsubscribed + Error). This declutters
+     the row, so it can hold up to ~4 buttons cleanly without crowding —
+     e.g. Error: View / Cleanup / Retry / Review Again, with the trash icon as a
+     visually-separate 5th action.
+   - (Only Error tiles get Retry; Unsubscribed stays Cleanup + trash.)
+2. **Unsubscribe method dropdown.** Keep auto-best as the default selection
+   everywhere. Lead with a dropdown of all available methods (one-click / email /
+   browser / embedded) in the **retry** modal so a failed one-click can be
+   retried via another method. In the first-time modal, keep the `via:` line;
+   optionally make it click-to-expand into the same dropdown. Verify we store
+   multiple methods per sender (`unsubUrls` + `embeddedUrl`) — else the dropdown
+   often has one entry.
 
 ## Resolved
 - **Where do delete/move (cleanup) failures land?** A cleanup failure is not an
