@@ -23,6 +23,15 @@ async function saveSubscriptions(subs) {
   await browser.storage.local.set({ subscriptions: subs });
 }
 
+async function getLastScan() {
+  const result = await browser.storage.local.get('lastScan');
+  return result.lastScan || null;
+}
+
+async function saveLastScan(lastScan) {
+  await browser.storage.local.set({ lastScan });
+}
+
 async function getDryRun() {
   const result = await browser.storage.local.get('dryRun');
   return result.dryRun !== false;
@@ -50,6 +59,7 @@ async function fullReset() {
     throw new Error('Stop the active scan before running a full reset.');
   }
   await browser.storage.local.remove('subscriptions');
+  await browser.storage.local.remove('lastScan');
   scanState = {
     status: 'idle',
     progress: 0,
@@ -580,6 +590,13 @@ async function runScan() {
     const finalSendersFound = Object.keys(subs).length;
     const wasStopped = scanState.stopped;
 
+    await saveLastScan({
+      messagesScanned: finalMessagesScanned,
+      sendersFound: finalSendersFound,
+      interrupted: wasStopped,
+      at: now
+    });
+
     scanState = {
       status: 'done',
       progress: wasStopped ? scanState.progress : allFolders.length,
@@ -762,12 +779,15 @@ async function setDecision(senderEmail, recipientAddress, decision, dispose, cle
 
 async function getStats() {
   const subs = await loadSubscriptions();
+  const lastScan = await getLastScan();
   return {
     total: subs.length,
     pending: subs.filter(s => s.decision === 'pending').length,
     kept: subs.filter(s => s.decision === 'keep').length,
     unsubscribed: subs.filter(s => s.decision === 'unsubscribed').length,
-    error: subs.filter(s => s.decision === 'error').length
+    error: subs.filter(s => s.decision === 'error').length,
+    emailsScanned: lastScan ? lastScan.messagesScanned : 0,
+    lastScanAt: lastScan ? lastScan.at : null
   };
 }
 

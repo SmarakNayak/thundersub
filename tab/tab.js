@@ -136,6 +136,7 @@ async function doFullReset() {
 async function loadStats() {
   try {
     const s = await bg('getStats');
+    document.getElementById('stat-scanned').textContent = (s.emailsScanned || 0).toLocaleString();
     document.getElementById('stat-total').textContent = s.total;
     document.getElementById('stat-pending').textContent = s.pending;
     document.getElementById('stat-kept').textContent = s.kept;
