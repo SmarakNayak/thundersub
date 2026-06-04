@@ -58,12 +58,19 @@
 
   <div class="sidebar-footer">
     <h3>Advanced Settings</h3>
-    <label class="dry-run-toggle">
+    <label class="settings-toggle dry-run-toggle">
       <span>
         <strong>Dry Run</strong>
         <small>No subscriptions are deleted, moved or unsubscribed from</small>
       </span>
       <input type="checkbox" id="dry-run-toggle" checked>
+    </label>
+    <label class="settings-toggle">
+      <span>
+        <strong>Auto-send unsubscribe emails</strong>
+        <small>Send mailto unsubscribe requests without opening a draft first</small>
+      </span>
+      <input type="checkbox" id="auto-send-email-toggle">
     </label>
     <button id="full-reset-btn">Full Reset</button>
   </div>

@@ -4,6 +4,7 @@ let currentFilter = 'pending';
 let scanPollTimer = null;
 let subsCache = [];
 let dryRun = true;
+let autoSendUnsubscribeEmails = false;
 
 // ── Utils ────────────────────────────────────────────────────────────────────
 function esc(s) {
@@ -70,6 +71,32 @@ async function updateDryRun(enabled) {
   } catch (e) {
     document.getElementById('dry-run-toggle').checked = dryRun;
     toast('Failed to update dry run setting: ' + (e.message || e), 'error');
+  }
+}
+
+async function loadAutoSendUnsubscribeEmails() {
+  try {
+    const result = await bg('getAutoSendUnsubscribeEmails');
+    autoSendUnsubscribeEmails = result.autoSendUnsubscribeEmails === true;
+    document.getElementById('auto-send-email-toggle').checked = autoSendUnsubscribeEmails;
+  } catch (e) {
+    autoSendUnsubscribeEmails = false;
+    document.getElementById('auto-send-email-toggle').checked = false;
+  }
+}
+
+async function updateAutoSendUnsubscribeEmails(enabled) {
+  try {
+    const result = await bg('setAutoSendUnsubscribeEmails', { autoSendUnsubscribeEmails: enabled });
+    autoSendUnsubscribeEmails = result.autoSendUnsubscribeEmails === true;
+    document.getElementById('auto-send-email-toggle').checked = autoSendUnsubscribeEmails;
+    toast(
+      autoSendUnsubscribeEmails ? 'Unsubscribe emails will be sent automatically' : 'Unsubscribe emails will open as drafts',
+      autoSendUnsubscribeEmails ? 'info' : 'success'
+    );
+  } catch (e) {
+    document.getElementById('auto-send-email-toggle').checked = autoSendUnsubscribeEmails;
+    toast('Failed to update email unsubscribe setting: ' + (e.message || e), 'error');
   }
 }
 
@@ -199,24 +226,26 @@ function buildActions(s) {
     if (hasMessages) {
       return `
       <button class="btn btn-view js-view" ${attrs}>View</button>
-      <button class="btn btn-outline js-cleanup-move" ${attrs}>Move Emails</button>
-      <button class="btn btn-danger js-cleanup-delete" ${attrs}>Delete Emails</button>`;
+      <button class="btn btn-outline js-cleanup-move" ${attrs}>Move</button>
+      <button class="btn btn-danger js-cleanup-delete" ${attrs}>Delete</button>`;
     }
     return '<span class="action-note">Run a scan to manage remaining emails</span>';
   }
 
   if (s.decision === 'error') {
-    if (s.error?.stage === 'delete' || s.error?.stage === 'move') {
+    // Any failure (unsubscribe, delete, or move) offers the same recovery actions:
+    // the emails are still present, so let the user clean them up or re-review.
+    if (hasMessages) {
       return `
       <button class="btn btn-view js-view" ${attrs}>View</button>
-      <button class="btn btn-outline js-cleanup-move" ${attrs}>Move Emails</button>
-      <button class="btn btn-danger js-cleanup-delete" ${attrs}>Delete Emails</button>
-      <button class="btn btn-keep js-reset-pending" ${attrs}>Send to Pending</button>`;
+      <button class="btn btn-outline js-cleanup-move" ${attrs}>Move</button>
+      <button class="btn btn-danger js-cleanup-delete" ${attrs}>Delete</button>
+      <button class="btn btn-keep js-reset-pending" title="Move this subscription back to Pending for review." ${attrs}>Review Again</button>`;
     }
     return `
     <button class="btn btn-view js-view" ${attrs}>View</button>
     <button class="btn btn-unsub js-open-modal" ${attrs}>Retry</button>
-    <button class="btn btn-keep js-reset-pending" ${attrs}>Send to Pending</button>`;
+    <button class="btn btn-keep js-reset-pending" title="Move this subscription back to Pending for review." ${attrs}>Review Again</button>`;
   }
 
   return `
@@ -589,9 +618,14 @@ function dryRunSummary(sub, method, dispose, selectedFolders, destination) {
     return 'Dry run: would leave existing emails as-is. No changes made.';
   }
 
-  let summary = method
-    ? `Dry run: would unsubscribe via ${METHOD_LABELS[method.type]}`
-    : 'Dry run: no unsubscribe method is available';
+  let summary;
+  if (!method) {
+    summary = 'Dry run: no unsubscribe method is available';
+  } else if (method.type === 'mail' && !autoSendUnsubscribeEmails) {
+    summary = 'Dry run: would prepare an unsubscribe email draft';
+  } else {
+    summary = `Dry run: would unsubscribe via ${METHOD_LABELS[method.type]}`;
+  }
   if (dispose === 'delete') {
     summary += ` and delete ${selectedMessageCount(sub, selectedFolders)} emails`;
   } else if (dispose === 'move') {
@@ -654,6 +688,7 @@ async function doUnsubscribeConfirm() {
 
   // Fire unsubscribe
   let ok = false;
+  let unsubscribeResult = null;
   if (modalMode === 'cleanup') {
     ok = true;
     confirmBtn.textContent = 'Applying...';
@@ -661,12 +696,13 @@ async function doUnsubscribeConfirm() {
     try {
       if (method.type === 'oneclick') {
         const r = await bg('unsubOneClick', { url: method.url });
+        unsubscribeResult = r;
         ok = r.ok;
       } else if (method.type === 'mail') {
-        await bg('unsubMail', { url: method.url, senderEmail: modalSenderEmail });
+        unsubscribeResult = await bg('unsubMail', { url: method.url, senderEmail: modalSenderEmail });
         ok = true;
       } else {
-        await bg('unsubWeb', { url: method.url });
+        unsubscribeResult = await bg('unsubWeb', { url: method.url });
         ok = true;
       }
     } catch (e) {
@@ -688,7 +724,7 @@ async function doUnsubscribeConfirm() {
     confirmBtn.textContent = modalMode === 'cleanup' ? 'Apply' : 'Unsubscribe';
     closeUnsubModal();
     loadStats();
-    loadSubs(currentFilter);
+    showErrorsView();
     return;
   }
 
@@ -708,8 +744,9 @@ async function doUnsubscribeConfirm() {
       toast('Error deleting emails: ' + (e.message || e), 'error');
       confirmBtn.disabled = false;
       confirmBtn.textContent = modalMode === 'cleanup' ? 'Apply' : 'Unsubscribe';
+      closeUnsubModal();
       loadStats();
-      loadSubs(currentFilter);
+      showErrorsView();
       return;
     }
   } else if (dispose === 'move' && selectedFolders.length > 0) {
@@ -736,8 +773,9 @@ async function doUnsubscribeConfirm() {
         toast('Error moving emails: ' + (e.message || e), 'error');
         confirmBtn.disabled = false;
         confirmBtn.textContent = modalMode === 'cleanup' ? 'Apply' : 'Unsubscribe';
+        closeUnsubModal();
         loadStats();
-        loadSubs(currentFilter);
+        showErrorsView();
         return;
       }
     } else {
@@ -772,6 +810,10 @@ async function doUnsubscribeConfirm() {
   const name = sub.senderName || sub.senderEmail;
   if (modalMode === 'cleanup') {
     toast(`Updated email cleanup for ${name}`, 'success');
+  } else if (unsubscribeResult?.drafted) {
+    toast(`Prepared unsubscribe email draft for ${name}`, 'success');
+  } else if (unsubscribeResult?.sent) {
+    toast(`Sent unsubscribe email for ${name}`, 'success');
   } else if (ok) {
     toast(`Unsubscribed from ${name}`, 'success');
   } else {
@@ -818,6 +860,12 @@ async function doPending(senderEmail, recipientAddress) {
   }
 }
 
+function showErrorsView() {
+  const errorTab = document.querySelector('.filter-tab[data-filter="error"]');
+  if (errorTab) setFilter('error', errorTab);
+  else loadSubs('error');
+}
+
 async function doCleanupDelete(senderEmail, recipientAddress) {
   if (!confirm('Delete the remaining emails for this subscription?')) return;
   try {
@@ -840,7 +888,7 @@ async function doCleanupDelete(senderEmail, recipientAddress) {
     });
     toast('Error deleting emails: ' + (e.message || e), 'error');
     loadStats();
-    loadSubs(currentFilter);
+    showErrorsView();
   }
 }
 
@@ -936,6 +984,9 @@ document.addEventListener('DOMContentLoaded', async () => {
   document.getElementById('dry-run-toggle').addEventListener('change', (e) => {
     updateDryRun(e.target.checked);
   });
+  document.getElementById('auto-send-email-toggle').addEventListener('change', (e) => {
+    updateAutoSendUnsubscribeEmails(e.target.checked);
+  });
   document.getElementById('full-reset-btn').addEventListener('click', doFullReset);
   attachCardListeners();
 
@@ -990,6 +1041,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   });
 
   await loadDryRun();
+  await loadAutoSendUnsubscribeEmails();
   await loadStats();
   await loadSubs('pending');
 

@@ -34,6 +34,17 @@ async function setDryRun(dryRun) {
   return { dryRun: enabled };
 }
 
+async function getAutoSendUnsubscribeEmails() {
+  const result = await browser.storage.local.get('autoSendUnsubscribeEmails');
+  return result.autoSendUnsubscribeEmails === true;
+}
+
+async function setAutoSendUnsubscribeEmails(autoSendUnsubscribeEmails) {
+  const enabled = autoSendUnsubscribeEmails === true;
+  await browser.storage.local.set({ autoSendUnsubscribeEmails: enabled });
+  return { autoSendUnsubscribeEmails: enabled };
+}
+
 async function fullReset() {
   if (scanState.status === 'scanning') {
     throw new Error('Stop the active scan before running a full reset.');
@@ -233,18 +244,98 @@ function addToMessageGroups(groups, accountName, folderName, folderId, msgId, he
   }
 }
 
+async function logScanMessageIdMismatch(folder, accountName, listedMessage, headerMessageId, full) {
+  if (!headerMessageId) return;
+
+  try {
+    const found = await queryByHeaderMessageId(folder.id, headerMessageId);
+    const foundIds = found.map(m => m.id);
+    if (foundIds.length > 0 && !foundIds.includes(listedMessage.id)) {
+      console.warn('[ThunderSub][scan] MessageId mismatch before storage', {
+        accountName,
+        folderName: folder.name,
+        folderId: folder.id,
+        listedMessageId: listedMessage.id,
+        listedHeaderMessageId: listedMessage.headerMessageId || null,
+        fullHeaderMessageId: headerMessageId,
+        queryFoundIds: foundIds,
+        queryFoundMessages: found.map(m => ({
+          id: m.id,
+          author: m.author || '',
+          subject: m.subject || '',
+          date: m.date || '',
+          folderId: m.folder?.id || null,
+          folderName: m.folder?.name || null
+        })),
+        listedSubject: listedMessage.subject || '',
+        listedAuthor: listedMessage.author || '',
+        fullHeaderKeys: full && full.headers ? Object.keys(full.headers).slice(0, 20) : []
+      });
+    }
+  } catch (e) {
+    console.warn('[ThunderSub][scan] MessageId verification failed', {
+      accountName,
+      folderName: folder.name,
+      folderId: folder.id,
+      listedMessageId: listedMessage.id,
+      headerMessageId,
+      error: e && e.message ? e.message : String(e)
+    });
+  }
+}
+
 function folderMatchesSelection(group, selectedFolder) {
   if (group.folderId && selectedFolder.folderId) return group.folderId === selectedFolder.folderId;
   return selectedFolder.accountName === group.accountName && selectedFolder.folderName === group.folderName;
 }
 
+function selectGroupsForFolders(groups, selectedFolders) {
+  if (!selectedFolders || selectedFolders.length === 0) return groups;
+  return groups.filter(g => selectedFolders.some(f => folderMatchesSelection(g, f)));
+}
+
 function getIdsForFolders(groups, selectedFolders) {
-  if (!selectedFolders || selectedFolders.length === 0) {
-    return groups.flatMap(g => g.messageIds);
+  return selectGroupsForFolders(groups, selectedFolders).flatMap(g => g.messageIds);
+}
+
+// Stored numeric message ids (messages.MessageId) are internal tracking numbers
+// that do NOT survive a Thunderbird restart and do NOT follow a moved message.
+// See: https://webextension-api.thunderbird.net/en/latest/messages.html#messages-messageid
+// So before deleting/moving we re-resolve the *current* numeric ids from the
+// stable RFC 5322 Message-ID header (headerMessageIds) within each group's folder.
+async function resolveCurrentMessageIds(groups, selectedFolders) {
+  const selected = selectGroupsForFolders(groups, selectedFolders);
+  const ids = [];
+  const unresolvedHeaderIds = [];
+
+  for (const g of selected) {
+    const headerIds = g.headerMessageIds || [];
+    if (headerIds.length === 0) {
+      // Older data without header ids: fall back to stored numeric ids. These are
+      // only valid within the same session, but it's the best we can do.
+      for (const id of g.messageIds || []) {
+        if (!ids.includes(id)) ids.push(id);
+      }
+      continue;
+    }
+    for (const headerMessageId of headerIds) {
+      let found = [];
+      try {
+        found = await queryByHeaderMessageId(g.folderId, headerMessageId);
+      } catch (e) {
+        console.warn('[ThunderSub] Failed to resolve message by header id', headerMessageId, e);
+      }
+      if (found.length === 0) {
+        unresolvedHeaderIds.push(headerMessageId);
+        continue;
+      }
+      for (const m of found) {
+        if (!ids.includes(m.id)) ids.push(m.id);
+      }
+    }
   }
-  return groups
-    .filter(g => selectedFolders.some(f => folderMatchesSelection(g, f)))
-    .flatMap(g => g.messageIds);
+
+  return { ids, unresolvedHeaderIds };
 }
 
 function getHeaderIdsForFolders(groups, selectedFolders) {
@@ -439,6 +530,7 @@ async function runScan() {
               if (embeddedUrl && !s.embeddedUrl) s.embeddedUrl = embeddedUrl;
 
               const headerMessageId = normalizeHeaderMessageId(m.headerMessageId || full.headers['message-id']);
+              await logScanMessageIdMismatch(folder, accountName, m, headerMessageId, full);
               addToMessageGroups(s.messageGroups, accountName, folder.name, folder.id, m.id, headerMessageId);
               scanState.sendersFound = Object.keys(subs).length;
             } catch (e) {
@@ -575,12 +667,17 @@ async function unsubMail(mailtoUrl) {
   if (identityId) details.identityId = identityId;
 
   const composeTab = await browser.compose.beginNew(details);
+  const autoSend = await getAutoSendUnsubscribeEmails();
+  if (!autoSend) {
+    return { ok: true, to, drafted: true };
+  }
+
   const result = await browser.compose.sendMessage(composeTab.id, { mode: 'sendNow' });
 
   if (!result || typeof result.headerMessageId === 'undefined') {
     throw new Error('Failed to send unsubscribe email');
   }
-  return { ok: true, to };
+  return { ok: true, to, sent: true };
 }
 
 async function unsubWeb(url) {
@@ -609,7 +706,10 @@ async function deleteEmails(senderEmail, recipientAddress, selectedFolders) {
     return { deleted: 0 };
   }
 
-  const ids = getIdsForFolders(sub.messageGroups, selectedFolders);
+  const { ids, unresolvedHeaderIds } = await resolveCurrentMessageIds(sub.messageGroups, selectedFolders);
+  if (unresolvedHeaderIds.length > 0) {
+    console.warn(`[ThunderSub] ${unresolvedHeaderIds.length} message(s) could not be re-resolved before delete (moved or removed):`, unresolvedHeaderIds);
+  }
   if (ids.length === 0) return { deleted: 0 };
 
   let deleted = 0;
@@ -618,7 +718,7 @@ async function deleteEmails(senderEmail, recipientAddress, selectedFolders) {
   for (let i = 0; i < ids.length; i += batchSize) {
     const batch = ids.slice(i, i + batchSize);
     try {
-      await browser.messages.delete(batch, false);
+      await browser.messages.delete(batch, { deletePermanently: false });
       deleted += batch.length;
     } catch (e) {
       failed += batch.length;
@@ -644,7 +744,10 @@ async function moveEmails(senderEmail, recipientAddress, selectedFolders, destin
     return { moved: 0 };
   }
 
-  const ids = getIdsForFolders(sub.messageGroups, selectedFolders);
+  const { ids, unresolvedHeaderIds } = await resolveCurrentMessageIds(sub.messageGroups, selectedFolders);
+  if (unresolvedHeaderIds.length > 0) {
+    console.warn(`[ThunderSub] ${unresolvedHeaderIds.length} message(s) could not be re-resolved before move (moved or removed):`, unresolvedHeaderIds);
+  }
   if (ids.length === 0) return { moved: 0 };
   const headerMessageIds = getHeaderIdsForFolders(sub.messageGroups, selectedFolders);
 
@@ -859,6 +962,12 @@ browser.runtime.onMessage.addListener((request, sender) => {
 
     case 'setDryRun':
       return setDryRun(request.dryRun);
+
+    case 'getAutoSendUnsubscribeEmails':
+      return getAutoSendUnsubscribeEmails().then(autoSendUnsubscribeEmails => ({ autoSendUnsubscribeEmails }));
+
+    case 'setAutoSendUnsubscribeEmails':
+      return setAutoSendUnsubscribeEmails(request.autoSendUnsubscribeEmails);
 
     case 'fullReset':
       return fullReset();
