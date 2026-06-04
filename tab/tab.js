@@ -327,7 +327,6 @@ function buildCard(s) {
   if (s.decision === 'unsubscribed') {
     badges += `<span class="badge badge-unsub">Unsubscribed</span>`;
     if (s.dispose && DISPOSE_LABELS[s.dispose]) badges += `<span class="badge badge-neutral">${DISPOSE_LABELS[s.dispose]}</span>`;
-    if (s.cleanupDestination?.label) badges += `<span class="badge badge-neutral">${esc(s.cleanupDestination.label)}</span>`;
   }
   if (s.decision === 'error') badges += `<span class="badge badge-error">Error</span>`;
 
@@ -822,25 +821,39 @@ async function doUnsubscribeConfirm() {
     return;
   }
 
+  // Outcome of the unsubscribe step itself, independent of cleanup: a real
+  // unsubscribe → unsubscribed; a standalone cleanup keeps the prior decision.
+  const outcomeDecision = modalMode === 'cleanup' ? (sub.decision || 'unsubscribed') : 'unsubscribed';
+
+  // A cleanup (delete/move) failure is NOT an unsubscribe failure — the
+  // unsubscribe already succeeded. Keep the unsubscribe outcome, leave the
+  // emails in place (dispose: null), and let the Cleanup button retry.
+  async function handleCleanupFailure(stage, e) {
+    await bg('decide', {
+      senderEmail: modalSenderEmail,
+      recipientAddress: modalRecipientAddress,
+      decision: outcomeDecision,
+      dispose: null,
+      error: outcomeDecision === 'error' ? sub.error : undefined
+    });
+    const msg = modalMode === 'cleanup'
+      ? `Cleanup failed while ${stage} emails: ${e.message || e}. Use Cleanup to retry.`
+      : `Unsubscribed, but ${stage} emails failed: ${e.message || e}. Use Cleanup to retry.`;
+    toast(msg, 'error');
+    confirmBtn.disabled = false;
+    confirmBtn.textContent = modalMode === 'cleanup' ? 'Apply' : 'Unsubscribe';
+    closeUnsubModal();
+    loadStats();
+    loadSubs(currentFilter);
+  }
+
   // Apply dispose action on selected folders
   if (dispose === 'delete' && selectedFolders.length > 0) {
     try {
       const result = await bg('deleteEmails', { senderEmail: modalSenderEmail, recipientAddress: modalRecipientAddress, selectedFolders });
       if (result?.dryRun) toast(`Dry run: would delete ${result.deleted || 0} emails`, 'info');
     } catch (e) {
-      await bg('decide', {
-        senderEmail: modalSenderEmail,
-        recipientAddress: modalRecipientAddress,
-        decision: 'error',
-        dispose,
-        error: errorPayload('delete', e.message || e)
-      });
-      toast('Error deleting emails: ' + (e.message || e), 'error');
-      confirmBtn.disabled = false;
-      confirmBtn.textContent = modalMode === 'cleanup' ? 'Apply' : 'Unsubscribe';
-      closeUnsubModal();
-      loadStats();
-      showErrorsView();
+      await handleCleanupFailure('deleting', e);
       return;
     }
   } else if (dispose === 'move' && selectedFolders.length > 0) {
@@ -856,20 +869,7 @@ async function doUnsubscribeConfirm() {
         if (result?.dryRun) toast(`Dry run: would move ${result.moved || 0} emails`, 'info');
         else if (result && !result.resolved) toast('Moved emails, but could not locate them in the destination yet. Run a scan to manage them again.', 'info');
       } catch (e) {
-        await bg('decide', {
-          senderEmail: modalSenderEmail,
-          recipientAddress: modalRecipientAddress,
-          decision: 'error',
-          dispose,
-          cleanupDestination: destination,
-          error: errorPayload('move', e.message || e)
-        });
-        toast('Error moving emails: ' + (e.message || e), 'error');
-        confirmBtn.disabled = false;
-        confirmBtn.textContent = modalMode === 'cleanup' ? 'Apply' : 'Unsubscribe';
-        closeUnsubModal();
-        loadStats();
-        showErrorsView();
+        await handleCleanupFailure('moving', e);
         return;
       }
     } else {
@@ -880,18 +880,15 @@ async function doUnsubscribeConfirm() {
     }
   }
 
-  // Finalize decision. A real unsubscribe marks it unsubscribed; a cleanup
-  // keeps the existing decision (an errored sub whose emails were handled is
-  // still NOT unsubscribed — the unsubscribe never succeeded).
-  const finalDecision = modalMode === 'cleanup' ? (sub.decision || 'unsubscribed') : 'unsubscribed';
+  // Finalize decision (cleanup succeeded or nothing to dispose).
   try {
     await bg('decide', {
       senderEmail: modalSenderEmail,
       recipientAddress: modalRecipientAddress,
-      decision: finalDecision,
+      decision: outcomeDecision,
       dispose,
       cleanupDestination: destination,
-      error: finalDecision === 'error' ? sub.error : undefined
+      error: outcomeDecision === 'error' ? sub.error : undefined
     });
   } catch (e) {
     toast('Error: ' + (e.message || e), 'error');

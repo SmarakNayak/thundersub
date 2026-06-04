@@ -709,7 +709,7 @@ async function deleteEmails(senderEmail, recipientAddress, selectedFolders) {
   }
 
   if (failed > 0) {
-    throw new Error(`Failed to delete ${failed} of ${ids.length} emails. No subscription state was changed.`);
+    throw new Error(`Failed to delete ${failed} of ${ids.length} emails.`);
   }
 
   sub.messageGroups = removeGroupsForFolders(sub.messageGroups, selectedFolders);
@@ -748,7 +748,7 @@ async function moveEmails(senderEmail, recipientAddress, selectedFolders, destin
   }
 
   if (failed > 0) {
-    throw new Error(`Failed to move ${failed} of ${ids.length} emails. No subscription state was changed.`);
+    throw new Error(`Failed to move ${failed} of ${ids.length} emails.`);
   }
 
   const remainingGroups = removeGroupsForFolders(sub.messageGroups, selectedFolders);
