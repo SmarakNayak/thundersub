@@ -9,7 +9,10 @@
      the row, so it can hold up to ~4 buttons cleanly without crowding —
      e.g. Error: View / Cleanup / Retry / Review Again, with the trash icon as a
      visually-separate 5th action.
-   - (Only Error tiles get Retry; Unsubscribed stays Cleanup + trash.)
+   - Tile action sets:
+     - **Error:** View / Cleanup / Retry / Review Again + trash icon
+     - **Unsubscribed:** View / Cleanup / Review Again + trash icon
+       (no Retry — only Error tiles get Retry)
 2. **Unsubscribe method dropdown.** Keep auto-best as the default selection
    everywhere. Lead with a dropdown of all available methods (one-click / email /
    browser / embedded) in the **retry** modal so a failed one-click can be
