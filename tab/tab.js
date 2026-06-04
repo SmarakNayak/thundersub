@@ -282,8 +282,7 @@ function buildActions(s) {
     if (hasMessages) {
       return `
       <button class="btn btn-view js-view" ${attrs}>View</button>
-      <button class="btn btn-outline js-cleanup-move" ${attrs}>Move</button>
-      <button class="btn btn-danger js-cleanup-delete" ${attrs}>Delete</button>
+      <button class="btn btn-outline js-cleanup" ${attrs}>Cleanup</button>
       ${dismissBtn}`;
     }
     return `
@@ -292,19 +291,20 @@ function buildActions(s) {
   }
 
   if (s.decision === 'error') {
-    // Any failure (unsubscribe, delete, or move) offers the same recovery actions:
-    // the emails are still present, so let the user clean them up or re-review.
+    // The unsubscribe never succeeded, so an errored sub stays in Errors even
+    // after its emails are handled. Dismiss is always available to clear it.
+    const dismissBtn = `<button class="btn btn-muted js-dismiss" title="Remove this subscription from the list." ${attrs}>Dismiss</button>`;
     if (hasMessages) {
       return `
       <button class="btn btn-view js-view" ${attrs}>View</button>
-      <button class="btn btn-outline js-cleanup-move" ${attrs}>Move</button>
-      <button class="btn btn-danger js-cleanup-delete" ${attrs}>Delete</button>
-      <button class="btn btn-keep js-reset-pending" title="Move this subscription back to Pending for review." ${attrs}>Review Again</button>`;
+      <button class="btn btn-outline js-cleanup" ${attrs}>Cleanup</button>
+      <button class="btn btn-keep js-reset-pending" title="Move this subscription back to Pending for review." ${attrs}>Review Again</button>
+      ${dismissBtn}`;
     }
     return `
     <button class="btn btn-view js-view" ${attrs}>View</button>
-    <button class="btn btn-unsub js-open-modal" ${attrs}>Retry</button>
-    <button class="btn btn-keep js-reset-pending" title="Move this subscription back to Pending for review." ${attrs}>Review Again</button>`;
+    <button class="btn btn-keep js-reset-pending" title="Move this subscription back to Pending for review." ${attrs}>Review Again</button>
+    ${dismissBtn}`;
   }
 
   return `
@@ -389,13 +389,8 @@ function attachCardListeners() {
       return;
     }
 
-    if (btn.classList.contains('js-cleanup-delete')) {
-      await doCleanupDelete(btn.dataset.senderEmail, btn.dataset.recipientAddress);
-      return;
-    }
-
-    if (btn.classList.contains('js-cleanup-move')) {
-      openCleanupModal(btn.dataset.senderEmail, btn.dataset.recipientAddress, 'move');
+    if (btn.classList.contains('js-cleanup')) {
+      openCleanupModal(btn.dataset.senderEmail, btn.dataset.recipientAddress);
       return;
     }
 
@@ -500,6 +495,10 @@ function openCleanupModal(senderEmail, recipientAddress, action) {
   modalMode = 'cleanup';
   cleanupDefaultAction = action;
 
+  const statusLabel = sub.decision === 'error'
+    ? (sub.error?.stage === 'unsubscribe' ? 'unsubscribe failed' : `${sub.error?.stage || 'action'} failed`)
+    : 'already unsubscribed';
+
   document.getElementById('modal-title').textContent =
     `Manage emails from ${sub.senderName || sub.senderEmail}`;
   document.getElementById('modal-addresses').innerHTML = `
@@ -514,7 +513,7 @@ function openCleanupModal(senderEmail, recipientAddress, action) {
       </div>
       <div class="modal-kv">
         <span class="modal-kv-label">Status:</span>
-        <span class="modal-method">already unsubscribed</span>
+        <span class="modal-method">${esc(statusLabel)}</span>
       </div>
     </div>`;
 
@@ -881,25 +880,34 @@ async function doUnsubscribeConfirm() {
     }
   }
 
-  // Mark as unsubscribed
+  // Finalize decision. A real unsubscribe marks it unsubscribed; a cleanup
+  // keeps the existing decision (an errored sub whose emails were handled is
+  // still NOT unsubscribed — the unsubscribe never succeeded).
+  const finalDecision = modalMode === 'cleanup' ? (sub.decision || 'unsubscribed') : 'unsubscribed';
   try {
     await bg('decide', {
       senderEmail: modalSenderEmail,
       recipientAddress: modalRecipientAddress,
-      decision: 'unsubscribed',
+      decision: finalDecision,
       dispose,
-      cleanupDestination: destination
+      cleanupDestination: destination,
+      error: finalDecision === 'error' ? sub.error : undefined
     });
   } catch (e) {
     toast('Error: ' + (e.message || e), 'error');
   }
 
-  // Remove card
-  const cardId = `card-${sid(modalSenderEmail, modalRecipientAddress)}`;
-  const card = document.getElementById(cardId);
-  if (card) {
-    card.classList.add('fading');
-    setTimeout(() => card.remove(), 300);
+  // Cleanup keeps the sub in its current category (e.g. an errored sub stays
+  // in Errors), so refresh the list in place rather than removing the card.
+  if (modalMode === 'cleanup') {
+    loadSubs(currentFilter);
+  } else {
+    const cardId = `card-${sid(modalSenderEmail, modalRecipientAddress)}`;
+    const card = document.getElementById(cardId);
+    if (card) {
+      card.classList.add('fading');
+      setTimeout(() => card.remove(), 300);
+    }
   }
 
   const name = sub.senderName || sub.senderEmail;
@@ -960,33 +968,6 @@ function showErrorsView() {
   if (errorTab) setFilter('error', errorTab);
   else loadSubs('error');
 }
-
-async function doCleanupDelete(senderEmail, recipientAddress) {
-  if (!confirm('Delete the remaining emails for this subscription?')) return;
-  try {
-    const result = await bg('deleteEmails', { senderEmail, recipientAddress, selectedFolders: [] });
-    if (result?.dryRun) {
-      toast(`Dry run: would delete ${result.deleted || 0} emails`, 'info');
-      return;
-    }
-    await bg('decide', { senderEmail, recipientAddress, decision: 'unsubscribed', dispose: 'delete' });
-    toast(`Deleted remaining emails for ${senderEmail}`, 'success');
-    loadStats();
-    loadSubs(currentFilter);
-  } catch (e) {
-    await bg('decide', {
-      senderEmail,
-      recipientAddress,
-      decision: 'error',
-      dispose: 'delete',
-      error: errorPayload('delete', e.message || e)
-    });
-    toast('Error deleting emails: ' + (e.message || e), 'error');
-    loadStats();
-    showErrorsView();
-  }
-}
-
 
 // ── Filter ───────────────────────────────────────────────────────────────────
 function setFilter(filter, btn) {
