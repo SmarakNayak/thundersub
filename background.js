@@ -196,13 +196,22 @@ async function collectAllFolders(account) {
 // Simple (accountName, folderName) keying for delete/archive scope.
 // Unsub data lives at the top level of each subscription.
 
-function addToMessageGroups(groups, accountName, folderName, msgId) {
+function normalizeHeaderMessageId(value) {
+  const raw = Array.isArray(value) ? value[0] : value;
+  return String(raw || '').trim().replace(/^<|>$/g, '');
+}
+
+function addToMessageGroups(groups, accountName, folderName, folderId, msgId, headerMessageId) {
   let group = groups.find(g => g.accountName === accountName && g.folderName === folderName);
   if (!group) {
-    group = { accountName, folderName, messageIds: [] };
+    group = { accountName, folderName, folderId, messageIds: [], headerMessageIds: [] };
     groups.push(group);
   }
+  if (!group.folderId) group.folderId = folderId;
   group.messageIds.push(msgId);
+  if (headerMessageId && !group.headerMessageIds.includes(headerMessageId)) {
+    group.headerMessageIds.push(headerMessageId);
+  }
 }
 
 function getIdsForFolders(groups, selectedFolders) {
@@ -214,6 +223,13 @@ function getIdsForFolders(groups, selectedFolders) {
     .flatMap(g => g.messageIds);
 }
 
+function getHeaderIdsForFolders(groups, selectedFolders) {
+  const selected = (!selectedFolders || selectedFolders.length === 0)
+    ? groups
+    : groups.filter(g => selectedFolders.some(f => f.accountName === g.accountName && f.folderName === g.folderName));
+  return [...new Set(selected.flatMap(g => g.headerMessageIds || []).filter(Boolean))];
+}
+
 function removeGroupsForFolders(groups, selectedFolders) {
   if (!selectedFolders || selectedFolders.length === 0) return [];
   return groups
@@ -222,6 +238,44 @@ function removeGroupsForFolders(groups, selectedFolders) {
 
 function totalMessageCount(groups) {
   return groups.reduce((sum, g) => sum + g.messageIds.length, 0);
+}
+
+async function collectAllQueryResults(queryInfo) {
+  const messages = [];
+  let page = await browser.messages.query(queryInfo);
+  while (page && page.messages && page.messages.length > 0) {
+    messages.push(...page.messages);
+    if (!page.id) break;
+    page = await browser.messages.continueList(page.id);
+  }
+  return messages;
+}
+
+async function buildMovedMessageGroup(headerMessageIds, destinationFolderId, destinationMeta) {
+  if (!headerMessageIds.length) return null;
+
+  const messageIds = [];
+  const foundHeaderIds = [];
+  for (const headerMessageId of headerMessageIds) {
+    const found = await collectAllQueryResults({
+      folderId: destinationFolderId,
+      headerMessageId,
+      messagesPerPage: 100
+    });
+    for (const m of found) {
+      if (!messageIds.includes(m.id)) messageIds.push(m.id);
+    }
+    if (found.length > 0) foundHeaderIds.push(headerMessageId);
+  }
+
+  if (!messageIds.length) return null;
+  return {
+    accountName: destinationMeta?.accountName || '',
+    folderName: destinationMeta?.folderName || destinationMeta?.folderPath || 'Moved',
+    folderId: destinationFolderId,
+    messageIds,
+    headerMessageIds: foundHeaderIds
+  };
 }
 
 // ── Scanner ──────────────────────────────────────────────────────────────────
@@ -395,9 +449,11 @@ async function runScan() {
         embeddedUrl: s.embeddedUrl,
         _nameFreqs: s._nameFreqs,
         messageGroups: s.messageGroups,
-        decision: (prev && (prev.decision === 'keep' || prev.decision === 'unsubscribed'))
+        decision: (prev && (prev.decision === 'keep' || prev.decision === 'unsubscribed' || prev.decision === 'error'))
           ? prev.decision : 'pending',
         dispose: prev ? prev.dispose : null,
+        cleanupDestination: prev ? prev.cleanupDestination : null,
+        error: prev ? prev.error : null,
         updatedAt: now
       });
     }
@@ -564,13 +620,15 @@ async function moveEmails(senderEmail, recipientAddress, selectedFolders, destin
 }
 
 // ── Other actions ────────────────────────────────────────────────────────────
-async function setDecision(senderEmail, recipientAddress, decision, dispose) {
+async function setDecision(senderEmail, recipientAddress, decision, dispose, cleanupDestination, error) {
   const subs = await loadSubscriptions();
   const sub = subs.find(s => s.senderEmail === senderEmail && s.recipientAddress === recipientAddress);
   if (!sub) throw new Error('Subscription not found');
 
   sub.decision = decision;
   sub.dispose = dispose || null;
+  sub.cleanupDestination = cleanupDestination || null;
+  sub.error = error || null;
   sub.updatedAt = new Date().toISOString();
   await saveSubscriptions(subs);
 }
@@ -581,7 +639,8 @@ async function getStats() {
     total: subs.length,
     pending: subs.filter(s => s.decision === 'pending').length,
     kept: subs.filter(s => s.decision === 'keep').length,
-    unsubscribed: subs.filter(s => s.decision === 'unsubscribed').length
+    unsubscribed: subs.filter(s => s.decision === 'unsubscribed').length,
+    error: subs.filter(s => s.decision === 'error').length
   };
 }
 
@@ -740,7 +799,7 @@ browser.runtime.onMessage.addListener((request, sender) => {
       return setDryRun(request.dryRun);
 
     case 'decide':
-      return setDecision(request.senderEmail, request.recipientAddress, request.decision, request.dispose)
+      return setDecision(request.senderEmail, request.recipientAddress, request.decision, request.dispose, request.cleanupDestination, request.error)
         .then(() => ({ ok: true }));
 
     case 'deleteEmails':

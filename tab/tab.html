@@ -17,6 +17,7 @@
     <div class="stat-row"><span class="stat-label">Pending</span><span class="stat-val" id="stat-pending">—</span></div>
     <div class="stat-row"><span class="stat-label">Kept</span><span class="stat-val" id="stat-kept">—</span></div>
     <div class="stat-row"><span class="stat-label">Unsubscribed</span><span class="stat-val" id="stat-unsub">—</span></div>
+    <div class="stat-row"><span class="stat-label">Errors</span><span class="stat-val" id="stat-error">—</span></div>
   </div>
 
   <div class="scan-section">
@@ -60,6 +61,9 @@
     <button class="filter-tab" data-filter="unsubscribed">
       Unsubscribed <span class="filter-badge" id="fb-unsubscribed">0</span>
     </button>
+    <button class="filter-tab" data-filter="error">
+      Errors <span class="filter-badge" id="fb-error">0</span>
+    </button>
   </div>
 </div>
 
@@ -87,7 +91,7 @@
       <div class="modal-dispose-options">
         <label class="dispose-option"><input type="radio" name="dispose" value="delete" checked><span>Delete</span></label>
         <label class="dispose-option"><input type="radio" name="dispose" value="move"><span>Move</span></label>
-        <label class="dispose-option"><input type="radio" name="dispose" value="keep"><span>Keep</span></label>
+        <label class="dispose-option"><input type="radio" name="dispose" value="keep"><span>Leave emails</span></label>
       </div>
     </div>
 
