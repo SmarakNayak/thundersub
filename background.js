@@ -1,8 +1,5 @@
 'use strict';
 
-// Set to true to route delete/archive through test functions (no emails touched)
-const TEST_DELETE = true;
-
 // ── State ────────────────────────────────────────────────────────────────────
 let scanState = {
   status: 'idle',
@@ -24,6 +21,17 @@ async function loadSubscriptions() {
 
 async function saveSubscriptions(subs) {
   await browser.storage.local.set({ subscriptions: subs });
+}
+
+async function getDryRun() {
+  const result = await browser.storage.local.get('dryRun');
+  return result.dryRun !== false;
+}
+
+async function setDryRun(dryRun) {
+  const enabled = dryRun !== false;
+  await browser.storage.local.set({ dryRun: enabled });
+  return { dryRun: enabled };
 }
 
 // ── Parsing helpers ──────────────────────────────────────────────────────────
@@ -166,7 +174,7 @@ async function collectAllFolders(account) {
       if (folder.name === 'All Mail' || folder.name === '[Gmail]/All Mail') continue;
       results.push(folder);
       try {
-        const subFolders = await browser.folders.getSubFolders(folder, false);
+        const subFolders = await browser.folders.getSubFolders(folder.id, false);
         if (subFolders && subFolders.length > 0) {
           await walk(subFolders);
         }
@@ -245,7 +253,7 @@ async function runScan() {
       if (scanState.stopped) break;
 
       try {
-        let page = await browser.messages.list(folder);
+        let page = await browser.messages.list(folder.id);
 
         pageLoop:
         while (page && page.messages && page.messages.length > 0) {
@@ -372,12 +380,6 @@ async function runScan() {
     for (const [key, s] of Object.entries(subs)) {
       const prev = existingMap[key];
 
-      // Cap message IDs per group to avoid storage bloat
-      const cappedGroups = s.messageGroups.map(g => ({
-        ...g,
-        messageIds: g.messageIds.slice(0, 100)
-      }));
-
       merged.push({
         senderEmail: s.senderEmail,
         senderName: s.senderName,
@@ -392,7 +394,7 @@ async function runScan() {
         hasEmbedded: !!s.embeddedUrl,
         embeddedUrl: s.embeddedUrl,
         _nameFreqs: s._nameFreqs,
-        messageGroups: cappedGroups,
+        messageGroups: s.messageGroups,
         decision: (prev && (prev.decision === 'keep' || prev.decision === 'unsubscribed'))
           ? prev.decision : 'pending',
         dispose: prev ? prev.dispose : null,
@@ -482,6 +484,11 @@ async function unsubEmbedded(url) {
   return { ok: true };
 }
 
+function dryRunUnsubscribe(type, url) {
+  console.log(`[DRY RUN] Would unsubscribe via ${type}: ${url}`);
+  return { ok: true, dryRun: true, type, url };
+}
+
 // ── Delete / Move ────────────────────────────────────────────────────────────
 //
 // selectedFolders: [{accountName, folderName}, ...] — which source folders to act on (all if empty)
@@ -497,6 +504,7 @@ async function deleteEmails(senderEmail, recipientAddress, selectedFolders) {
   if (ids.length === 0) return { deleted: 0 };
 
   let deleted = 0;
+  let failed = 0;
   const batchSize = 50;
   for (let i = 0; i < ids.length; i += batchSize) {
     const batch = ids.slice(i, i + batchSize);
@@ -504,8 +512,13 @@ async function deleteEmails(senderEmail, recipientAddress, selectedFolders) {
       await browser.messages.delete(batch, false);
       deleted += batch.length;
     } catch (e) {
+      failed += batch.length;
       console.warn('Failed to delete batch:', e);
     }
+  }
+
+  if (failed > 0) {
+    throw new Error(`Failed to delete ${failed} of ${ids.length} emails. No subscription state was changed.`);
   }
 
   sub.messageGroups = removeGroupsForFolders(sub.messageGroups, selectedFolders);
@@ -526,6 +539,7 @@ async function moveEmails(senderEmail, recipientAddress, selectedFolders, destin
   if (ids.length === 0) return { moved: 0 };
 
   let moved = 0;
+  let failed = 0;
   const batchSize = 50;
   for (let i = 0; i < ids.length; i += batchSize) {
     const batch = ids.slice(i, i + batchSize);
@@ -533,8 +547,13 @@ async function moveEmails(senderEmail, recipientAddress, selectedFolders, destin
       await browser.messages.move(batch, destinationFolderId);
       moved += batch.length;
     } catch (e) {
+      failed += batch.length;
       console.warn('Failed to move batch:', e);
     }
+  }
+
+  if (failed > 0) {
+    throw new Error(`Failed to move ${failed} of ${ids.length} emails. No subscription state was changed.`);
   }
 
   sub.messageGroups = removeGroupsForFolders(sub.messageGroups, selectedFolders);
@@ -576,46 +595,38 @@ async function getSubscriptions(filter) {
   return filtered;
 }
 
-// ── Test functions for delete/move (no TB APIs, logs + updates storage) ──────
+// ── Dry-run functions for delete/move (no Thunderbird messages touched) ──────
 
-async function testDeleteEmails(senderEmail, recipientAddress, selectedFolders) {
+async function dryRunDeleteEmails(senderEmail, recipientAddress, selectedFolders) {
   const subs = await loadSubscriptions();
   const sub = subs.find(s => s.senderEmail === senderEmail && s.recipientAddress === recipientAddress);
   if (!sub || !sub.messageGroups || sub.messageGroups.length === 0) {
-    return { deleted: 0 };
+    return { deleted: 0, dryRun: true };
   }
 
   const ids = getIdsForFolders(sub.messageGroups, selectedFolders);
   const folderDesc = selectedFolders && selectedFolders.length
     ? selectedFolders.map(f => `${f.accountName}/${f.folderName}`).join(', ')
     : 'all';
-  console.log(`[TEST] Would DELETE ${ids.length} emails from ${sub.senderName || ''} <${senderEmail}> → ${recipientAddress} | folders=${folderDesc}`);
+  console.log(`[DRY RUN] Would DELETE ${ids.length} emails from ${sub.senderName || ''} <${senderEmail}> → ${recipientAddress} | folders=${folderDesc}`);
 
-  sub.messageGroups = removeGroupsForFolders(sub.messageGroups, selectedFolders);
-  sub.emailCount = totalMessageCount(sub.messageGroups);
-  await saveSubscriptions(subs);
-
-  return { deleted: ids.length };
+  return { deleted: ids.length, dryRun: true };
 }
 
-async function testMoveEmails(senderEmail, recipientAddress, selectedFolders, destinationFolderId) {
+async function dryRunMoveEmails(senderEmail, recipientAddress, selectedFolders, destinationFolderId) {
   const subs = await loadSubscriptions();
   const sub = subs.find(s => s.senderEmail === senderEmail && s.recipientAddress === recipientAddress);
   if (!sub || !sub.messageGroups || sub.messageGroups.length === 0) {
-    return { moved: 0 };
+    return { moved: 0, dryRun: true };
   }
 
   const ids = getIdsForFolders(sub.messageGroups, selectedFolders);
   const folderDesc = selectedFolders && selectedFolders.length
     ? selectedFolders.map(f => `${f.accountName}/${f.folderName}`).join(', ')
     : 'all';
-  console.log(`[TEST] Would MOVE ${ids.length} emails from ${sub.senderName || ''} <${senderEmail}> → ${recipientAddress} | folders=${folderDesc} → dest=${destinationFolderId}`);
+  console.log(`[DRY RUN] Would MOVE ${ids.length} emails from ${sub.senderName || ''} <${senderEmail}> → ${recipientAddress} | folders=${folderDesc} → dest=${destinationFolderId}`);
 
-  sub.messageGroups = removeGroupsForFolders(sub.messageGroups, selectedFolders);
-  sub.emailCount = totalMessageCount(sub.messageGroups);
-  await saveSubscriptions(subs);
-
-  return { moved: ids.length };
+  return { moved: ids.length, dryRun: true };
 }
 
 // ── Folder tree / creation / view ────────────────────────────────────────────
@@ -633,7 +644,7 @@ async function getFolderTree() {
         if (f.type === 'junk' || f.type === 'trash') continue;
         const node = { id: f.id, name: f.name, path: f.path, type: f.type || '', subFolders: [] };
         try {
-          const children = await browser.folders.getSubFolders(f, false);
+          const children = await browser.folders.getSubFolders(f.id, false);
           if (children && children.length > 0) {
             node.subFolders = await walkFolders(children);
           }
@@ -722,17 +733,23 @@ browser.runtime.onMessage.addListener((request, sender) => {
     case 'getSubscriptions':
       return getSubscriptions(request.filter);
 
+    case 'getDryRun':
+      return getDryRun().then(dryRun => ({ dryRun }));
+
+    case 'setDryRun':
+      return setDryRun(request.dryRun);
+
     case 'decide':
       return setDecision(request.senderEmail, request.recipientAddress, request.decision, request.dispose)
         .then(() => ({ ok: true }));
 
     case 'deleteEmails':
-      return (TEST_DELETE ? testDeleteEmails : deleteEmails)(
-        request.senderEmail, request.recipientAddress, request.selectedFolders);
+      return getDryRun().then(dryRun => (dryRun ? dryRunDeleteEmails : deleteEmails)(
+        request.senderEmail, request.recipientAddress, request.selectedFolders));
 
     case 'moveEmails':
-      return (TEST_DELETE ? testMoveEmails : moveEmails)(
-        request.senderEmail, request.recipientAddress, request.selectedFolders, request.destinationFolderId);
+      return getDryRun().then(dryRun => (dryRun ? dryRunMoveEmails : moveEmails)(
+        request.senderEmail, request.recipientAddress, request.selectedFolders, request.destinationFolderId));
 
     case 'getFolderTree':
       return getFolderTree();
@@ -744,16 +761,24 @@ browser.runtime.onMessage.addListener((request, sender) => {
       return viewSubscription(request.senderEmail, request.recipientAddress);
 
     case 'unsubOneClick':
-      return unsubOneClick(request.url);
+      return getDryRun().then(dryRun => dryRun
+        ? dryRunUnsubscribe('one-click', request.url)
+        : unsubOneClick(request.url));
 
     case 'unsubMail':
-      return unsubMail(request.url);
+      return getDryRun().then(dryRun => dryRun
+        ? dryRunUnsubscribe('email', request.url)
+        : unsubMail(request.url));
 
     case 'unsubWeb':
-      return unsubWeb(request.url);
+      return getDryRun().then(dryRun => dryRun
+        ? dryRunUnsubscribe('browser', request.url)
+        : unsubWeb(request.url));
 
     case 'unsubEmbedded':
-      return unsubEmbedded(request.url);
+      return getDryRun().then(dryRun => dryRun
+        ? dryRunUnsubscribe('embedded link', request.url)
+        : unsubEmbedded(request.url));
 
     case 'openTab':
       return browser.tabs.create({ url: '/tab/tab.html' }).then(() => ({ ok: true }));

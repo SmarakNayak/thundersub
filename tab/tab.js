@@ -3,6 +3,7 @@
 let currentFilter = 'pending';
 let scanPollTimer = null;
 let subsCache = [];
+let dryRun = true;
 
 // ── Utils ────────────────────────────────────────────────────────────────────
 function esc(s) {
@@ -49,6 +50,29 @@ function senderLabel(sub) {
 }
 
 // ── Stats & filter badges ────────────────────────────────────────────────────
+async function loadDryRun() {
+  try {
+    const result = await bg('getDryRun');
+    dryRun = result.dryRun !== false;
+    document.getElementById('dry-run-toggle').checked = dryRun;
+  } catch (e) {
+    dryRun = true;
+    document.getElementById('dry-run-toggle').checked = true;
+  }
+}
+
+async function updateDryRun(enabled) {
+  try {
+    const result = await bg('setDryRun', { dryRun: enabled });
+    dryRun = result.dryRun !== false;
+    document.getElementById('dry-run-toggle').checked = dryRun;
+    toast(dryRun ? 'Dry run enabled' : 'Dry run disabled', dryRun ? 'info' : 'success');
+  } catch (e) {
+    document.getElementById('dry-run-toggle').checked = dryRun;
+    toast('Failed to update dry run setting: ' + (e.message || e), 'error');
+  }
+}
+
 async function loadStats() {
   try {
     const s = await bg('getStats');
@@ -308,14 +332,24 @@ function renderFolderNodes(folders, depth) {
   let html = '';
   for (const f of folders) {
     const hasChildren = f.subFolders && f.subFolders.length > 0;
+    const name = (f.name || '').toLowerCase();
+    const path = (f.path || '').toLowerCase();
+    const isMoveTargetDisabled =
+      // name === '[gmail]' ||
+      // path === '[gmail]' ||
+      // path === '/[gmail]' ||
+      name === 'all mail' ||
+      path === 'all mail' ||
+      path.endsWith('/all mail') ||
+      f.type === 'virtual';
     const indent = depth * 16;
     html += `<div class="tree-node" style="padding-left:${indent}px">
-      <label class="tree-folder-label">
+      <label class="tree-folder-label${isMoveTargetDisabled ? ' tree-folder-disabled' : ''}" title="${isMoveTargetDisabled ? 'This folder cannot receive moved messages' : ''}">
         ${hasChildren
           ? `<span class="tree-toggle" data-folder-id="${esc(f.id)}">&#9656;</span>`
           : '<span class="tree-spacer"></span>'}
-        <input type="radio" name="dest-folder" value="${esc(f.id)}">
-        <span>${esc(f.name)}</span>
+        <input type="radio" name="dest-folder" value="${esc(f.id)}" data-folder-name="${esc(f.name)}" data-folder-path="${esc(f.path || f.name)}"${isMoveTargetDisabled ? ' disabled' : ''}>
+        <span class="tree-folder-name">${esc(f.name)}${isMoveTargetDisabled ? ' (unavailable)' : ''}</span>
       </label>
     </div>`;
     if (hasChildren) {
@@ -368,6 +402,47 @@ function getSelectedFolders() {
     });
 }
 
+function getSelectedDestination() {
+  const radio = document.querySelector('input[name="dest-folder"]:checked');
+  if (!radio) return null;
+  const accountEl = radio.closest('.tree-account')?.querySelector('.tree-account-name');
+  const accountName = accountEl ? accountEl.textContent.trim() : '';
+  const folderName = radio.dataset.folderName || radio.value;
+  const folderPath = radio.dataset.folderPath || folderName;
+  return {
+    id: radio.value,
+    folderName,
+    folderPath,
+    label: accountName ? `${accountName} / ${folderPath}` : folderPath,
+    disabled: radio.disabled
+  };
+}
+
+function selectedMessageCount(sub, selectedFolders) {
+  const groups = sub.messageGroups || [];
+  if (!selectedFolders || selectedFolders.length === 0) {
+    return groups.reduce((sum, g) => sum + g.messageIds.length, 0);
+  }
+  return groups
+    .filter(g => selectedFolders.some(f => f.accountName === g.accountName && f.folderName === g.folderName))
+    .reduce((sum, g) => sum + g.messageIds.length, 0);
+}
+
+function dryRunSummary(sub, method, dispose, selectedFolders, destination) {
+  let summary = method
+    ? `Dry run: would unsubscribe via ${METHOD_LABELS[method.type]}`
+    : 'Dry run: no unsubscribe method is available';
+  if (dispose === 'delete') {
+    summary += ` and delete ${selectedMessageCount(sub, selectedFolders)} emails`;
+  } else if (dispose === 'move') {
+    summary += ` and move ${selectedMessageCount(sub, selectedFolders)} emails`;
+    if (destination) summary += ` to ${destination.label}`;
+  } else {
+    summary += ' and keep existing emails';
+  }
+  return `${summary}. No changes made.`;
+}
+
 async function doUnsubscribeConfirm() {
   if (!modalSenderEmail) return;
   const sub = subsCache.find(s => s.senderEmail === modalSenderEmail && s.recipientAddress === modalRecipientAddress);
@@ -375,14 +450,46 @@ async function doUnsubscribeConfirm() {
 
   const dispose = document.querySelector('input[name="dispose"]:checked').value;
   const selectedFolders = getSelectedFolders();
+  const method = getBestMethod(sub);
+  const destination = dispose === 'move' ? getSelectedDestination() : null;
 
   const confirmBtn = document.getElementById('modal-confirm');
   confirmBtn.disabled = true;
+  confirmBtn.textContent = 'Checking...';
+
+  try {
+    const result = await bg('getDryRun');
+    dryRun = result.dryRun !== false;
+    document.getElementById('dry-run-toggle').checked = dryRun;
+  } catch (e) {
+    dryRun = true;
+    document.getElementById('dry-run-toggle').checked = true;
+  }
+
+  if (dryRun) {
+    if (dispose === 'move' && selectedFolders.length > 0 && !destination) {
+      toast('Select a destination folder', 'info');
+      confirmBtn.disabled = false;
+      confirmBtn.textContent = 'Unsubscribe';
+      return;
+    }
+    if (destination?.disabled) {
+      toast('Select an available destination folder', 'info');
+      confirmBtn.disabled = false;
+      confirmBtn.textContent = 'Unsubscribe';
+      return;
+    }
+    toast(dryRunSummary(sub, method, dispose, selectedFolders, destination), 'info');
+    confirmBtn.disabled = false;
+    confirmBtn.textContent = 'Unsubscribe';
+    closeUnsubModal();
+    return;
+  }
+
   confirmBtn.textContent = 'Unsubscribing...';
 
   // Fire unsubscribe
   let ok = false;
-  const method = getBestMethod(sub);
   if (method) {
     try {
       if (method.type === 'oneclick') {
@@ -403,25 +510,32 @@ async function doUnsubscribeConfirm() {
   // Apply dispose action on selected folders
   if (dispose === 'delete' && selectedFolders.length > 0) {
     try {
-      await bg('deleteEmails', { senderEmail: modalSenderEmail, recipientAddress: modalRecipientAddress, selectedFolders });
+      const result = await bg('deleteEmails', { senderEmail: modalSenderEmail, recipientAddress: modalRecipientAddress, selectedFolders });
+      if (result?.dryRun) toast(`Dry run: would delete ${result.deleted || 0} emails`, 'info');
     } catch (e) {
       toast('Error deleting emails: ' + (e.message || e), 'error');
+      confirmBtn.disabled = false;
+      confirmBtn.textContent = 'Unsubscribe';
+      return;
     }
   } else if (dispose === 'move' && selectedFolders.length > 0) {
-    const destRadio = document.querySelector('input[name="dest-folder"]:checked');
-    if (destRadio) {
+    if (destination && !destination.disabled) {
       try {
-        await bg('moveEmails', {
+        const result = await bg('moveEmails', {
           senderEmail: modalSenderEmail,
           recipientAddress: modalRecipientAddress,
           selectedFolders,
-          destinationFolderId: destRadio.value
+          destinationFolderId: destination.id
         });
+        if (result?.dryRun) toast(`Dry run: would move ${result.moved || 0} emails`, 'info');
       } catch (e) {
         toast('Error moving emails: ' + (e.message || e), 'error');
+        confirmBtn.disabled = false;
+        confirmBtn.textContent = 'Unsubscribe';
+        return;
       }
     } else {
-      toast('Select a destination folder', 'info');
+      toast(destination?.disabled ? 'Select an available destination folder' : 'Select a destination folder', 'info');
       confirmBtn.disabled = false;
       confirmBtn.textContent = 'Unsubscribe';
       return;
@@ -568,6 +682,9 @@ function pollScanStatus() {
 // ── Init ─────────────────────────────────────────────────────────────────────
 document.addEventListener('DOMContentLoaded', async () => {
   document.getElementById('scan-btn').addEventListener('click', startScan);
+  document.getElementById('dry-run-toggle').addEventListener('change', (e) => {
+    updateDryRun(e.target.checked);
+  });
   attachCardListeners();
 
   document.getElementById('modal-cancel').addEventListener('click', closeUnsubModal);
@@ -620,6 +737,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     tab.addEventListener('click', () => setFilter(tab.dataset.filter, tab));
   });
 
+  await loadDryRun();
   await loadStats();
   await loadSubs('pending');
 
