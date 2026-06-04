@@ -191,7 +191,7 @@ async function collectAllFolders(account) {
 // ── Message group helpers ────────────────────────────────────────────────────
 //
 // messageGroups is an array of:
-//   { accountName, folderName, messageIds }
+//   { accountName, folderName, folderId, messageIds, headerMessageIds }
 //
 // Simple (accountName, folderName) keying for delete/archive scope.
 // Unsub data lives at the top level of each subscription.
@@ -214,26 +214,31 @@ function addToMessageGroups(groups, accountName, folderName, folderId, msgId, he
   }
 }
 
+function folderMatchesSelection(group, selectedFolder) {
+  if (group.folderId && selectedFolder.folderId) return group.folderId === selectedFolder.folderId;
+  return selectedFolder.accountName === group.accountName && selectedFolder.folderName === group.folderName;
+}
+
 function getIdsForFolders(groups, selectedFolders) {
   if (!selectedFolders || selectedFolders.length === 0) {
     return groups.flatMap(g => g.messageIds);
   }
   return groups
-    .filter(g => selectedFolders.some(f => f.accountName === g.accountName && f.folderName === g.folderName))
+    .filter(g => selectedFolders.some(f => folderMatchesSelection(g, f)))
     .flatMap(g => g.messageIds);
 }
 
 function getHeaderIdsForFolders(groups, selectedFolders) {
   const selected = (!selectedFolders || selectedFolders.length === 0)
     ? groups
-    : groups.filter(g => selectedFolders.some(f => f.accountName === g.accountName && f.folderName === g.folderName));
+    : groups.filter(g => selectedFolders.some(f => folderMatchesSelection(g, f)));
   return [...new Set(selected.flatMap(g => g.headerMessageIds || []).filter(Boolean))];
 }
 
 function removeGroupsForFolders(groups, selectedFolders) {
   if (!selectedFolders || selectedFolders.length === 0) return [];
   return groups
-    .filter(g => !selectedFolders.some(f => f.accountName === g.accountName && f.folderName === g.folderName));
+    .filter(g => !selectedFolders.some(f => folderMatchesSelection(g, f)));
 }
 
 function totalMessageCount(groups) {
@@ -251,21 +256,49 @@ async function collectAllQueryResults(queryInfo) {
   return messages;
 }
 
+async function queryByHeaderMessageId(folderId, headerMessageId) {
+  const values = [headerMessageId];
+  if (headerMessageId && !headerMessageId.startsWith('<')) {
+    values.push(`<${headerMessageId}>`);
+  }
+
+  for (const value of values) {
+    const found = await collectAllQueryResults({
+      folderId,
+      headerMessageId: value,
+      messagesPerPage: 100
+    });
+    if (found.length > 0) return found;
+  }
+  return [];
+}
+
 async function buildMovedMessageGroup(headerMessageIds, destinationFolderId, destinationMeta) {
   if (!headerMessageIds.length) return null;
 
   const messageIds = [];
   const foundHeaderIds = [];
-  for (const headerMessageId of headerMessageIds) {
-    const found = await collectAllQueryResults({
-      folderId: destinationFolderId,
-      headerMessageId,
-      messagesPerPage: 100
-    });
-    for (const m of found) {
-      if (!messageIds.includes(m.id)) messageIds.push(m.id);
+  const unresolved = new Set(headerMessageIds);
+  for (const delayMs of [0, 250, 750, 1500]) {
+    if (delayMs > 0) await new Promise(resolve => setTimeout(resolve, delayMs));
+
+    for (const headerMessageId of [...unresolved]) {
+      let found = [];
+      try {
+        found = await queryByHeaderMessageId(destinationFolderId, headerMessageId);
+      } catch (e) {
+        console.warn('Failed to resolve moved message:', e);
+      }
+      for (const m of found) {
+        if (!messageIds.includes(m.id)) messageIds.push(m.id);
+      }
+      if (found.length > 0) {
+        foundHeaderIds.push(headerMessageId);
+        unresolved.delete(headerMessageId);
+      }
     }
-    if (found.length > 0) foundHeaderIds.push(headerMessageId);
+
+    if (unresolved.size === 0) break;
   }
 
   if (!messageIds.length) return null;
@@ -386,7 +419,8 @@ async function runScan() {
               if (hasHttp) s.hasHttp = true;
               if (embeddedUrl && !s.embeddedUrl) s.embeddedUrl = embeddedUrl;
 
-              addToMessageGroups(s.messageGroups, accountName, folder.name, m.id);
+              const headerMessageId = normalizeHeaderMessageId(m.headerMessageId || full.headers['message-id']);
+              addToMessageGroups(s.messageGroups, accountName, folder.name, folder.id, m.id, headerMessageId);
               scanState.sendersFound = Object.keys(subs).length;
             } catch (e) {
               // Skip individual messages that fail
@@ -584,7 +618,7 @@ async function deleteEmails(senderEmail, recipientAddress, selectedFolders) {
   return { deleted };
 }
 
-async function moveEmails(senderEmail, recipientAddress, selectedFolders, destinationFolderId) {
+async function moveEmails(senderEmail, recipientAddress, selectedFolders, destinationFolderId, destinationMeta) {
   const subs = await loadSubscriptions();
   const sub = subs.find(s => s.senderEmail === senderEmail && s.recipientAddress === recipientAddress);
   if (!sub || !sub.messageGroups || sub.messageGroups.length === 0) {
@@ -593,6 +627,7 @@ async function moveEmails(senderEmail, recipientAddress, selectedFolders, destin
 
   const ids = getIdsForFolders(sub.messageGroups, selectedFolders);
   if (ids.length === 0) return { moved: 0 };
+  const headerMessageIds = getHeaderIdsForFolders(sub.messageGroups, selectedFolders);
 
   let moved = 0;
   let failed = 0;
@@ -612,11 +647,17 @@ async function moveEmails(senderEmail, recipientAddress, selectedFolders, destin
     throw new Error(`Failed to move ${failed} of ${ids.length} emails. No subscription state was changed.`);
   }
 
-  sub.messageGroups = removeGroupsForFolders(sub.messageGroups, selectedFolders);
+  const remainingGroups = removeGroupsForFolders(sub.messageGroups, selectedFolders);
+  const movedGroup = await buildMovedMessageGroup(headerMessageIds, destinationFolderId, destinationMeta);
+  sub.messageGroups = movedGroup ? [...remainingGroups, movedGroup] : remainingGroups;
   sub.emailCount = totalMessageCount(sub.messageGroups);
   await saveSubscriptions(subs);
 
-  return { moved };
+  return {
+    moved,
+    resolved: !!movedGroup,
+    resolvedCount: movedGroup ? movedGroup.messageIds.length : 0
+  };
 }
 
 // ── Other actions ────────────────────────────────────────────────────────────
@@ -672,7 +713,7 @@ async function dryRunDeleteEmails(senderEmail, recipientAddress, selectedFolders
   return { deleted: ids.length, dryRun: true };
 }
 
-async function dryRunMoveEmails(senderEmail, recipientAddress, selectedFolders, destinationFolderId) {
+async function dryRunMoveEmails(senderEmail, recipientAddress, selectedFolders, destinationFolderId, destinationMeta) {
   const subs = await loadSubscriptions();
   const sub = subs.find(s => s.senderEmail === senderEmail && s.recipientAddress === recipientAddress);
   if (!sub || !sub.messageGroups || sub.messageGroups.length === 0) {
@@ -683,7 +724,8 @@ async function dryRunMoveEmails(senderEmail, recipientAddress, selectedFolders, 
   const folderDesc = selectedFolders && selectedFolders.length
     ? selectedFolders.map(f => `${f.accountName}/${f.folderName}`).join(', ')
     : 'all';
-  console.log(`[DRY RUN] Would MOVE ${ids.length} emails from ${sub.senderName || ''} <${senderEmail}> → ${recipientAddress} | folders=${folderDesc} → dest=${destinationFolderId}`);
+  const destinationLabel = destinationMeta?.label || destinationFolderId;
+  console.log(`[DRY RUN] Would MOVE ${ids.length} emails from ${sub.senderName || ''} <${senderEmail}> → ${recipientAddress} | folders=${folderDesc} → dest=${destinationLabel}`);
 
   return { moved: ids.length, dryRun: true };
 }
@@ -740,14 +782,15 @@ async function viewSubscription(senderEmail, recipientAddress) {
     if (g.messageIds.length > bestGroup.messageIds.length) bestGroup = g;
   }
 
-  // Resolve folder ID
-  const accounts = await browser.accounts.list();
-  let folderId = null;
-  for (const account of accounts) {
-    if (account.name !== bestGroup.accountName) continue;
-    const folders = await collectAllFolders(account);
-    const found = folders.find(f => f.name === bestGroup.folderName);
-    if (found) { folderId = found.id; break; }
+  let folderId = bestGroup.folderId || null;
+  if (!folderId) {
+    const accounts = await browser.accounts.list();
+    for (const account of accounts) {
+      if (account.name !== bestGroup.accountName) continue;
+      const folders = await collectAllFolders(account);
+      const found = folders.find(f => f.name === bestGroup.folderName);
+      if (found) { folderId = found.id; break; }
+    }
   }
 
   if (!folderId) throw new Error('Folder not found');
@@ -808,7 +851,7 @@ browser.runtime.onMessage.addListener((request, sender) => {
 
     case 'moveEmails':
       return getDryRun().then(dryRun => (dryRun ? dryRunMoveEmails : moveEmails)(
-        request.senderEmail, request.recipientAddress, request.selectedFolders, request.destinationFolderId));
+        request.senderEmail, request.recipientAddress, request.selectedFolders, request.destinationFolderId, request.destination));
 
     case 'getFolderTree':
       return getFolderTree();

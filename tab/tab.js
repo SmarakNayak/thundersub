@@ -506,7 +506,7 @@ function getSelectedFolders() {
     .filter(cb => cb.checked)
     .map(cb => {
       const g = groups[parseInt(cb.dataset.idx)];
-      return { accountName: g.accountName, folderName: g.folderName };
+      return { accountName: g.accountName, folderName: g.folderName, folderId: g.folderId };
     });
 }
 
@@ -519,6 +519,7 @@ function getSelectedDestination() {
   const folderPath = radio.dataset.folderPath || folderName;
   return {
     id: radio.value,
+    accountName,
     folderName,
     folderPath,
     label: accountName ? `${accountName} / ${folderPath}` : folderPath,
@@ -532,7 +533,11 @@ function selectedMessageCount(sub, selectedFolders) {
     return groups.reduce((sum, g) => sum + g.messageIds.length, 0);
   }
   return groups
-    .filter(g => selectedFolders.some(f => f.accountName === g.accountName && f.folderName === g.folderName))
+    .filter(g => selectedFolders.some(f => (
+      g.folderId && f.folderId
+        ? g.folderId === f.folderId
+        : f.accountName === g.accountName && f.folderName === g.folderName
+    )))
     .reduce((sum, g) => sum + g.messageIds.length, 0);
 }
 
@@ -677,9 +682,11 @@ async function doUnsubscribeConfirm() {
           senderEmail: modalSenderEmail,
           recipientAddress: modalRecipientAddress,
           selectedFolders,
-          destinationFolderId: destination.id
+          destinationFolderId: destination.id,
+          destination
         });
         if (result?.dryRun) toast(`Dry run: would move ${result.moved || 0} emails`, 'info');
+        else if (result && !result.resolved) toast('Moved emails, but could not locate them in the destination yet. Run a scan to manage them again.', 'info');
       } catch (e) {
         await bg('decide', {
           senderEmail: modalSenderEmail,
