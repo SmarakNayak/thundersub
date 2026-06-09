@@ -102,26 +102,40 @@ function parseFromHeader(fromVal) {
   return { name: fromVal.trim(), email: '' };
 }
 
+function isReplyOrForwardSubject(subject) {
+  return /^\s*(?:(?:re|fw|fwd)\s*:\s*)+/i.test(String(subject || ''));
+}
+
 // ── Recipient address extraction ─────────────────────────────────────────────
 function parseRecipientAddress(fullMessage) {
-  // delivered-to is most reliable (added by the receiving mail server per-address)
-  const deliveredTo = fullMessage.headers && fullMessage.headers['delivered-to'];
-  if (deliveredTo && deliveredTo[0]) {
-    const parsed = parseFromHeader(deliveredTo[0].split(',')[0].trim());
-    if (parsed.email) return parsed.email;
+  const headers = fullMessage.headers || {};
+  for (const header of ['delivered-to', 'x-original-to', 'envelope-to']) {
+    const value = headers[header];
+    if (!value || !value[0]) continue;
+    const parsed = parseFromHeader(value[0].split(',')[0].trim());
+    if (parsed.email) return { address: parsed.email, source: header };
   }
-  // Fall back to To header
-  const to = fullMessage.headers && fullMessage.headers['to'];
+  const to = headers['to'];
   if (to && to[0]) {
     const parsed = parseFromHeader(to[0].split(',')[0].trim());
-    if (parsed.email) return parsed.email;
+    if (parsed.email) return { address: parsed.email, source: 'to' };
   }
-  return '';
+  return { address: '', source: 'unknown' };
 }
 
 // ── Embedded unsubscribe link detection ──────────────────────────────────────
 const UNSUB_REGEX = /\bun\W?subscri(?:be|bing|ption)\b/i;
 const URL_REGEX = /https?:\/\/[^\s"'<>]{1,1000}/g;
+const QUOTED_CONTAINER_SELECTOR = [
+  'blockquote',
+  '.gmail_quote',
+  '.gmail_extra',
+  '.moz-cite-prefix',
+  '.moz-forward-container',
+  '.yahoo_quoted',
+  '[type="cite"]'
+].join(',');
+const FORWARDED_TEXT_MARKER = /^\s*(?:begin forwarded message:|[-_]{2,}\s*(?:original|forwarded) message\s*[-_]{2,})\s*$/im;
 
 function findEmbeddedUnsubLink(messagePart) {
   if (!messagePart) return null;
@@ -133,6 +147,7 @@ function findEmbeddedUnsubLink(messagePart) {
 function findEmbeddedLinkHTML(part) {
   if (part.parts) {
     for (const sub of part.parts) {
+      if (String(sub.contentType || '').toLowerCase().startsWith('message/rfc822')) continue;
       const result = findEmbeddedLinkHTML(sub);
       if (result) return result;
     }
@@ -142,6 +157,23 @@ function findEmbeddedLinkHTML(part) {
   try {
     const parser = new DOMParser();
     const doc = parser.parseFromString(part.body, 'text/html');
+    doc.querySelectorAll(QUOTED_CONTAINER_SELECTOR).forEach(el => el.remove());
+
+    // Some clients flatten forwarded content instead of wrapping it in a
+    // blockquote. Remove everything after a visible forwarded-message marker.
+    const walker = doc.createTreeWalker(doc.body, NodeFilter.SHOW_TEXT);
+    while (walker.nextNode()) {
+      if (FORWARDED_TEXT_MARKER.test(walker.currentNode.textContent || '')) {
+        let node = walker.currentNode;
+        while (node) {
+          const next = nextNodeAfter(node, doc.body);
+          node.parentNode?.removeChild(node);
+          node = next;
+        }
+        break;
+      }
+    }
+
     const links = doc.querySelectorAll('a[href]');
 
     for (const link of links) {
@@ -151,10 +183,10 @@ function findEmbeddedLinkHTML(part) {
         return href;
       }
     }
-    const walker = doc.createTreeWalker(doc.body, NodeFilter.SHOW_TEXT);
-    while (walker.nextNode()) {
-      if (UNSUB_REGEX.test(walker.currentNode.textContent)) {
-        let el = walker.currentNode.parentElement;
+    const textWalker = doc.createTreeWalker(doc.body, NodeFilter.SHOW_TEXT);
+    while (textWalker.nextNode()) {
+      if (UNSUB_REGEX.test(textWalker.currentNode.textContent)) {
+        let el = textWalker.currentNode.parentElement;
         for (let depth = 0; depth < 5 && el; depth++) {
           if (el.tagName === 'A' && el.href && el.href.startsWith('http')) {
             return el.href;
@@ -169,14 +201,24 @@ function findEmbeddedLinkHTML(part) {
   return null;
 }
 
+function nextNodeAfter(node, root) {
+  if (node.nextSibling) return node.nextSibling;
+  while (node.parentNode && node.parentNode !== root) {
+    node = node.parentNode;
+    if (node.nextSibling) return node.nextSibling;
+  }
+  return null;
+}
+
 function findEmbeddedLinkText(part) {
   const body = extractTextBody(part);
   if (!body) return null;
+  const authoredBody = stripQuotedText(body);
 
-  const unsubMatches = [...body.matchAll(new RegExp(UNSUB_REGEX, 'gi'))];
+  const unsubMatches = [...authoredBody.matchAll(new RegExp(UNSUB_REGEX, 'gi'))];
   if (unsubMatches.length === 0) return null;
 
-  const urlMatches = [...body.matchAll(URL_REGEX)];
+  const urlMatches = [...authoredBody.matchAll(URL_REGEX)];
   if (urlMatches.length === 0) return null;
 
   let bestUrl = null;
@@ -193,10 +235,22 @@ function findEmbeddedLinkText(part) {
   return bestUrl;
 }
 
+function stripQuotedText(body) {
+  const lines = String(body || '').split(/\r?\n/);
+  const authored = [];
+  for (const line of lines) {
+    if (FORWARDED_TEXT_MARKER.test(line)) break;
+    if (/^\s*>/.test(line)) continue;
+    authored.push(line);
+  }
+  return authored.join('\n');
+}
+
 function extractTextBody(part) {
   if (part.body && part.contentType === 'text/plain') return part.body;
   if (part.parts) {
     for (const sub of part.parts) {
+      if (String(sub.contentType || '').toLowerCase().startsWith('message/rfc822')) continue;
       const result = extractTextBody(sub);
       if (result) return result;
     }
@@ -204,13 +258,30 @@ function extractTextBody(part) {
   return null;
 }
 
+function collectContentTypes(part, result = new Set()) {
+  if (!part) return [...result];
+  if (part.contentType) result.add(part.contentType);
+  for (const sub of (part.parts || [])) collectContentTypes(sub, result);
+  return [...result];
+}
+
+function addDetectionEvidence(sub, evidence) {
+  for (const source of evidence.sources) {
+    sub.detectionCounts[source] = (sub.detectionCounts[source] || 0) + 1;
+  }
+  sub.detectionEvidence.push(evidence);
+  sub.detectionEvidence.sort((a, b) => String(b.date || '').localeCompare(String(a.date || '')));
+  sub.detectionEvidence.length = Math.min(sub.detectionEvidence.length, 50);
+}
+
 // ── Folder collection ────────────────────────────────────────────────────────
 async function collectAllFolders(account) {
   const results = [];
+  const excludedFolderTypes = new Set(['junk', 'trash', 'sent', 'drafts', 'outbox', 'templates']);
 
   async function walk(folders) {
     for (const folder of folders) {
-      if (folder.type === 'junk' || folder.type === 'trash') continue;
+      if (excludedFolderTypes.has(folder.type)) continue;
       if (folder.name === 'All Mail' || folder.name === '[Gmail]/All Mail') continue;
       results.push(folder);
       try {
@@ -430,6 +501,10 @@ async function runScan() {
             }
             if (scanState.stopped) break pageLoop;
             try {
+              // Replies and forwards can contain unsubscribe links or headers
+              // belonging to quoted/nested messages, not the outer sender.
+              if (isReplyOrForwardSubject(m.subject)) continue;
+
               const full = await browser.messages.getFull(m.id);
               if (!full || !full.headers) continue;
 
@@ -448,17 +523,18 @@ async function runScan() {
                 hasHttp = urls.some(u => u.startsWith('http'));
               }
 
-              if (urls.length === 0) {
-                embeddedUrl = findEmbeddedUnsubLink(full);
-                if (!embeddedUrl) continue;
-              }
+              // Collect embedded links even when header-based methods exist so
+              // retry can offer every detected alternative.
+              embeddedUrl = findEmbeddedUnsubLink(full);
+              if (urls.length === 0 && !embeddedUrl) continue;
 
               scanState.messagesScanned++;
 
               const { name, email } = parseFromHeader(m.author);
               if (!email) continue;
 
-              const recipientAddress = parseRecipientAddress(full);
+              const recipient = parseRecipientAddress(full);
+              const recipientAddress = recipient.address;
               const key = `${email}|${recipientAddress}`;
 
               if (!subs[key]) {
@@ -475,6 +551,8 @@ async function runScan() {
                   hasMailto: false,
                   hasHttp: false,
                   embeddedUrl: null,
+                  detectionCounts: { header: 0, embedded: 0 },
+                  detectionEvidence: [],
                   messageGroups: []
                 };
               }
@@ -500,6 +578,22 @@ async function runScan() {
               if (embeddedUrl && !s.embeddedUrl) s.embeddedUrl = embeddedUrl;
 
               const headerMessageId = normalizeHeaderMessageId(m.headerMessageId || full.headers['message-id']);
+              addDetectionEvidence(s, {
+                headerMessageId,
+                subject: m.subject || '',
+                author: m.author || '',
+                date: dateStr,
+                accountName,
+                folderName: folder.name,
+                recipientSource: recipient.source,
+                sources: [
+                  ...(urls.length > 0 ? ['header'] : []),
+                  ...(embeddedUrl ? ['embedded'] : [])
+                ],
+                headerUrls: urls,
+                embeddedUrl,
+                contentTypes: collectContentTypes(full)
+              });
               addToMessageGroups(s.messageGroups, accountName, folder.name, folder.id, m.id, headerMessageId);
               scanState.sendersFound = Object.keys(subs).length;
             } catch (e) {
@@ -534,6 +628,20 @@ async function runScan() {
       delete s.senderNames;
     }
 
+    console.log('[ThunderSub] Subscription detection evidence (up to 50 newest messages per sender/recipient):');
+    console.table(Object.values(subs).flatMap(s => s.detectionEvidence.map(e => ({
+      sender: s.senderEmail,
+      recipient: s.recipientAddress,
+      subject: e.subject,
+      source: e.sources.join('+'),
+      headerUrls: e.headerUrls.length,
+      embeddedUrl: e.embeddedUrl || '',
+      account: e.accountName,
+      folder: e.folderName,
+      recipientSource: e.recipientSource,
+      contentTypes: e.contentTypes.join(', ')
+    }))));
+
     // Merge with existing stored subscriptions (preserve decisions)
     const existing = await loadSubscriptions();
     const existingMap = {};
@@ -567,6 +675,8 @@ async function runScan() {
         hasHttp: s.hasHttp,
         hasEmbedded: !!s.embeddedUrl,
         embeddedUrl: s.embeddedUrl,
+        detectionCounts: s.detectionCounts,
+        detectionEvidence: s.detectionEvidence,
         _nameFreqs: s._nameFreqs,
         messageGroups: s.messageGroups,
         decision,

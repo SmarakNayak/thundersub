@@ -1,6 +1,6 @@
 # ThunderSub — TODO
 
-## Open / planned
+## Resolved
 1. **Retry on Error tiles + move Dismiss to a garbage-can icon.**
    - Add a **Retry** action to Error tiles that re-opens the unsubscribe modal
      in place (no Pending round-trip).
@@ -20,8 +20,10 @@
    optionally make it click-to-expand into the same dropdown. Verify we store
    multiple methods per sender (`unsubUrls` + `embeddedUrl`) — else the dropdown
    often has one entry.
+3. **Subscription list controls.**
+   - Filter tiles by receiving address.
+   - Sort tiles by email count or most recent email.
 
-## Resolved
 - **Where do delete/move (cleanup) failures land?** A cleanup failure is not an
   unsubscribe failure — the unsubscribe already succeeded. So:
   - Unsubscribe fails → **Errors**.

@@ -7,6 +7,8 @@ let dryRun = true;
 let autoSendUnsubscribeEmails = false;
 let hasScannedBefore = false;
 let scanInProgress = false;
+let currentRecipientFilter = '';
+let currentSort = 'count';
 
 // The scan button reads "Rescan Emails" once a scan has produced data, else
 // "Scan Emails". Only touches the label while the button is idle so it never
@@ -189,10 +191,40 @@ async function loadSubs(filter) {
   try {
     const subs = await bg('getSubscriptions', { filter: filter === 'all' ? null : filter });
     subsCache = subs;
-    renderCards(subs);
+    refreshRecipientFilter();
+    renderFilteredCards();
   } catch (e) {
     grid.innerHTML = '<div style="color:var(--danger);padding:40px">Failed to load.</div>';
   }
+}
+
+function refreshRecipientFilter() {
+  const select = document.getElementById('recipient-filter');
+  const recipients = [...new Set(subsCache.map(s => s.recipientAddress || '').filter(Boolean))]
+    .sort((a, b) => a.localeCompare(b));
+  if (currentRecipientFilter && !recipients.includes(currentRecipientFilter)) {
+    currentRecipientFilter = '';
+  }
+  select.innerHTML = '<option value="">All receiving addresses</option>';
+  for (const recipient of recipients) {
+    const option = document.createElement('option');
+    option.value = recipient;
+    option.textContent = recipient;
+    select.appendChild(option);
+  }
+  select.value = currentRecipientFilter;
+}
+
+function renderFilteredCards() {
+  const filtered = subsCache
+    .filter(s => !currentRecipientFilter || s.recipientAddress === currentRecipientFilter)
+    .sort((a, b) => {
+      if (currentSort === 'recent') {
+        return new Date(b.lastDate || 0).getTime() - new Date(a.lastDate || 0).getTime();
+      }
+      return (b.emailCount || 0) - (a.emailCount || 0);
+    });
+  renderCards(filtered);
 }
 
 function renderCards(subs) {
@@ -218,10 +250,6 @@ function groupsByAccount(messageGroups) {
     result[g.accountName][g.folderName] = (result[g.accountName][g.folderName] || 0) + g.messageIds.length;
   }
   return result;
-}
-
-function totalCount(messageGroups) {
-  return (messageGroups || []).reduce((sum, g) => sum + g.messageIds.length, 0);
 }
 
 // ── Unsub methods ────────────────────────────────────────────────────────────
@@ -261,10 +289,51 @@ function getBestMethod(sub) {
   return null;
 }
 
+function getAvailableMethods(sub) {
+  const methods = [];
+  const add = (type, url) => {
+    if (url && !methods.some(m => m.type === type && m.url === url)) methods.push({ type, url });
+  };
+  for (const url of (sub.unsubUrls || [])) {
+    if (url.startsWith('http')) {
+      if (sub.oneClick) add('oneclick', url);
+      add('web', url);
+    } else if (url.startsWith('mailto:')) {
+      add('mail', url);
+    }
+  }
+  add('embedded', sub.embeddedUrl);
+  return methods;
+}
+
+function buildDetectionEvidence(s) {
+  const evidence = s.detectionEvidence || [];
+  if (!evidence.length) {
+    return '<div class="evidence-empty">No per-message detection evidence is available. Run a new scan.</div>';
+  }
+  return evidence.map(e => {
+    const sources = (e.sources || []).map(source =>
+      `<span class="badge ${source === 'header' ? 'badge-green' : 'badge-purple'}">${esc(source)}</span>`
+    ).join('');
+    const urls = [...(e.headerUrls || []), ...(e.embeddedUrl ? [e.embeddedUrl] : [])];
+    return `
+      <div class="evidence-item">
+        <div class="evidence-heading">${sources}<span>${esc(e.subject || '(no subject)')}</span></div>
+        <div class="evidence-meta">
+          <span>${esc(e.accountName || '')} | ${esc(e.folderName || '')}</span>
+          <span>Receiver source: ${esc(e.recipientSource || 'unknown')}</span>
+          <span>${esc(e.author || '')}</span>
+          <span>${esc(e.date ? new Date(e.date).toLocaleString() : '')}</span>
+        </div>
+        ${urls.length ? `<div class="evidence-urls">${urls.map(url => `<div>${esc(url)}</div>`).join('')}</div>` : ''}
+        ${e.headerMessageId ? `<div class="evidence-message-id">Message-ID: ${esc(e.headerMessageId)}</div>` : ''}
+      </div>`;
+  }).join('');
+}
+
 // ── Build card ───────────────────────────────────────────────────────────────
 function buildActions(s) {
   const attrs = `data-sender-email="${esc(s.senderEmail)}" data-recipient-address="${esc(s.recipientAddress || '')}"`;
-  const hasMessages = totalCount(s.messageGroups) > 0;
 
   if (s.decision === 'keep') {
     return `
@@ -273,38 +342,18 @@ function buildActions(s) {
   }
 
   if (s.decision === 'unsubscribed') {
-    const dismissBtn = `<button class="btn btn-muted js-dismiss" title="Remove this subscription from the list." ${attrs}>Dismiss</button>`;
-    if (s.dispose === 'delete') {
-      return `
-      <span class="action-note">No remaining email actions</span>
-      ${dismissBtn}`;
-    }
-    if (hasMessages) {
-      return `
-      <button class="btn btn-view js-view" ${attrs}>View</button>
-      <button class="btn btn-outline js-cleanup" ${attrs}>Cleanup</button>
-      ${dismissBtn}`;
-    }
     return `
-    <span class="action-note">Run a scan to manage remaining emails</span>
-    ${dismissBtn}`;
+    <button class="btn btn-view js-view" ${attrs}>View</button>
+    <button class="btn btn-outline js-cleanup" ${attrs}>Cleanup</button>
+    <button class="btn btn-keep js-reset-pending" title="Move this subscription back to Pending for review." ${attrs}>Review Again</button>`;
   }
 
   if (s.decision === 'error') {
-    // The unsubscribe never succeeded, so an errored sub stays in Errors even
-    // after its emails are handled. Dismiss is always available to clear it.
-    const dismissBtn = `<button class="btn btn-muted js-dismiss" title="Remove this subscription from the list." ${attrs}>Dismiss</button>`;
-    if (hasMessages) {
-      return `
-      <button class="btn btn-view js-view" ${attrs}>View</button>
-      <button class="btn btn-outline js-cleanup" ${attrs}>Cleanup</button>
-      <button class="btn btn-keep js-reset-pending" title="Move this subscription back to Pending for review." ${attrs}>Review Again</button>
-      ${dismissBtn}`;
-    }
     return `
     <button class="btn btn-view js-view" ${attrs}>View</button>
-    <button class="btn btn-keep js-reset-pending" title="Move this subscription back to Pending for review." ${attrs}>Review Again</button>
-    ${dismissBtn}`;
+    <button class="btn btn-outline js-cleanup" ${attrs}>Cleanup</button>
+    <button class="btn btn-unsub js-retry" ${attrs}>Retry</button>
+    <button class="btn btn-keep js-reset-pending" title="Move this subscription back to Pending for review." ${attrs}>Review Again</button>`;
   }
 
   return `
@@ -323,6 +372,10 @@ function buildCard(s) {
 
   // Badges
   let badges = `<span class="badge badge-blue">${s.emailCount} emails</span>`;
+  const headerCount = s.detectionCounts?.header || 0;
+  const embeddedCount = s.detectionCounts?.embedded || 0;
+  if (headerCount) badges += `<span class="badge badge-green" title="Detected from List-Unsubscribe headers">${headerCount} header</span>`;
+  if (embeddedCount) badges += `<span class="badge badge-purple" title="Detected from unsubscribe links in message bodies">${embeddedCount} embedded</span>`;
   if (s.decision === 'keep') badges += `<span class="badge badge-kept">Kept</span>`;
   if (s.decision === 'unsubscribed') {
     badges += `<span class="badge badge-unsub">Unsubscribed</span>`;
@@ -332,10 +385,13 @@ function buildCard(s) {
 
   const dateStr = s.lastDate ? new Date(s.lastDate).toLocaleDateString() : '';
   const cardId = `card-${id}`;
+  const dismissable = s.decision === 'unsubscribed' || s.decision === 'error';
+  const attrs = `data-sender-email="${esc(s.senderEmail)}" data-recipient-address="${esc(s.recipientAddress || '')}"`;
 
   return `
 <div class="card" id="${cardId}" data-sender-email="${esc(s.senderEmail)}" data-recipient-address="${esc(s.recipientAddress || '')}">
   <div class="card-body">
+    ${dismissable ? `<button class="card-dismiss js-dismiss" title="Dismiss this subscription" aria-label="Dismiss this subscription" ${attrs}>&#128465;</button>` : ''}
     <div class="card-top">
       <div class="avatar" style="background:${color}">${esc(ini)}</div>
       <div class="card-info">
@@ -351,7 +407,9 @@ function buildCard(s) {
     ${s.recipientAddress ? `<div class="card-accounts" title="Delivered to ${esc(s.recipientAddress)}">→ ${esc(s.recipientAddress)}</div>` : ''}
     ${s.sampleSubject ? `<div class="card-subject" title="${esc(s.sampleSubject)}">"${esc(s.sampleSubject.substring(0, 80))}"</div>` : ''}
     ${s.error?.message ? `<div class="card-error" title="${esc(s.error.message)}">${esc(s.error.stage || 'Error')}: ${esc(s.error.message)}</div>` : ''}
+    <button class="evidence-toggle js-evidence-toggle" type="button">Why detected?</button>
   </div>
+  <div class="detection-evidence">${buildDetectionEvidence(s)}</div>
   <div class="card-actions">
     ${buildActions(s)}
   </div>
@@ -363,6 +421,16 @@ function attachCardListeners() {
   document.getElementById('cards-grid').addEventListener('click', async (e) => {
     const btn = e.target.closest('button');
     if (!btn) return;
+
+    if (btn.classList.contains('js-evidence-toggle')) {
+      const card = btn.closest('.card');
+      const evidence = card?.querySelector('.detection-evidence');
+      if (evidence) {
+        const open = evidence.classList.toggle('open');
+        btn.textContent = open ? 'Hide detection details' : 'Why detected?';
+      }
+      return;
+    }
 
     if (btn.classList.contains('js-view')) {
       try {
@@ -385,6 +453,11 @@ function attachCardListeners() {
 
     if (btn.classList.contains('js-open-modal')) {
       openUnsubModal(btn.dataset.senderEmail, btn.dataset.recipientAddress);
+      return;
+    }
+
+    if (btn.classList.contains('js-retry')) {
+      openUnsubModal(btn.dataset.senderEmail, btn.dataset.recipientAddress, true);
       return;
     }
 
@@ -415,7 +488,14 @@ let modalSenderEmail = null;
 let modalRecipientAddress = null;
 let folderTreeCache = null;
 let modalMode = 'unsubscribe';
+let modalIsRetry = false;
+let modalSelectedMethod = null;
 let cleanupDefaultAction = null;
+
+function modalConfirmLabel() {
+  if (modalMode === 'cleanup') return 'Apply';
+  return modalIsRetry ? 'Retry' : 'Unsubscribe';
+}
 
 function renderModalSourceFolders(sub) {
   const groups = sub.messageGroups || [];
@@ -434,13 +514,15 @@ function renderModalSourceFolders(sub) {
   foldersSection.style.display = groups.length > 0 ? 'block' : 'none';
 }
 
-function openUnsubModal(senderEmail, recipientAddress) {
+function openUnsubModal(senderEmail, recipientAddress, isRetry = false) {
   const sub = subsCache.find(s => s.senderEmail === senderEmail && s.recipientAddress === recipientAddress);
   if (!sub) return;
 
   modalSenderEmail = senderEmail;
   modalRecipientAddress = recipientAddress;
   modalMode = 'unsubscribe';
+  modalIsRetry = isRetry;
+  modalSelectedMethod = null;
   cleanupDefaultAction = null;
 
   const method = getBestMethod(sub);
@@ -450,7 +532,12 @@ function openUnsubModal(senderEmail, recipientAddress) {
   document.getElementById('modal-title').textContent =
     `Unsubscribe from ${sub.senderName || sub.senderEmail}`;
 
-  // account / via rows. The method badge reveals the full destination on hover.
+  const availableMethods = getAvailableMethods(sub);
+  const methodOptions = availableMethods.map((candidate, index) =>
+    `<option value="${index}">${esc(METHOD_LABELS[candidate.type])}: ${esc(candidate.url)}</option>`
+  ).join('');
+
+  // Retry exposes every detected method while first-time unsubscribe shows the auto-best choice.
   const addrEl = document.getElementById('modal-addresses');
   addrEl.innerHTML = `
     <div class="modal-addr-row modal-addr-box">
@@ -464,9 +551,24 @@ function openUnsubModal(senderEmail, recipientAddress) {
       </div>
       <div class="modal-kv">
         <span class="modal-kv-label">Via:</span>
-        <span class="modal-method has-detail" title="${esc(detail)}">${esc(methodLabel)}</span>
+        ${isRetry
+          ? `<select id="modal-method-select" class="method-select">
+              <option value="auto">Auto-best (${esc(methodLabel)})</option>
+              ${methodOptions}
+            </select>`
+          : `<span class="modal-method has-detail" title="${esc(detail)}">${esc(methodLabel)}</span>`}
       </div>
+      ${isRetry ? `<div id="modal-method-help" class="method-help">${esc(detail)}</div>` : ''}
     </div>`;
+
+  if (isRetry) {
+    document.getElementById('modal-method-select').addEventListener('change', (e) => {
+      modalSelectedMethod = e.target.value === 'auto' ? null : availableMethods[Number(e.target.value)];
+      const selected = modalSelectedMethod || method;
+      document.getElementById('modal-method-help').textContent = methodDetail(selected);
+      document.getElementById('modal-confirm').title = methodDetail(selected);
+    });
+  }
 
   renderModalSourceFolders(sub);
   document.querySelector('.modal-dispose h4').textContent = 'What to do with existing emails?';
@@ -479,7 +581,7 @@ function openUnsubModal(senderEmail, recipientAddress) {
 
   const confirmBtn = document.getElementById('modal-confirm');
   confirmBtn.disabled = false;
-  confirmBtn.textContent = 'Unsubscribe';
+  confirmBtn.textContent = modalConfirmLabel();
   confirmBtn.title = detail;
 
   document.getElementById('unsub-modal-overlay').classList.add('open');
@@ -492,6 +594,8 @@ function openCleanupModal(senderEmail, recipientAddress, action) {
   modalSenderEmail = senderEmail;
   modalRecipientAddress = recipientAddress;
   modalMode = 'cleanup';
+  modalIsRetry = false;
+  modalSelectedMethod = null;
   cleanupDefaultAction = action;
 
   const statusLabel = sub.decision === 'error'
@@ -537,6 +641,8 @@ function closeUnsubModal() {
   modalSenderEmail = null;
   modalRecipientAddress = null;
   modalMode = 'unsubscribe';
+  modalIsRetry = false;
+  modalSelectedMethod = null;
   cleanupDefaultAction = null;
 }
 
@@ -741,7 +847,7 @@ async function doUnsubscribeConfirm() {
 
   const dispose = document.querySelector('input[name="dispose"]:checked').value;
   const selectedFolders = getSelectedFolders();
-  const method = getBestMethod(sub);
+  const method = modalSelectedMethod || getBestMethod(sub);
   const destination = dispose === 'move' ? getSelectedDestination() : null;
 
   const confirmBtn = document.getElementById('modal-confirm');
@@ -761,18 +867,18 @@ async function doUnsubscribeConfirm() {
     if (dispose === 'move' && selectedFolders.length > 0 && !destination) {
       toast('Select a destination folder', 'info');
       confirmBtn.disabled = false;
-      confirmBtn.textContent = modalMode === 'cleanup' ? 'Apply' : 'Unsubscribe';
+      confirmBtn.textContent = modalConfirmLabel();
       return;
     }
     if (destination?.disabled) {
       toast('Select an available destination folder', 'info');
       confirmBtn.disabled = false;
-      confirmBtn.textContent = modalMode === 'cleanup' ? 'Apply' : 'Unsubscribe';
+      confirmBtn.textContent = modalConfirmLabel();
       return;
     }
     toast(dryRunSummary(sub, method, dispose, selectedFolders, destination), 'info');
     confirmBtn.disabled = false;
-    confirmBtn.textContent = modalMode === 'cleanup' ? 'Apply' : 'Unsubscribe';
+    confirmBtn.textContent = modalConfirmLabel();
     closeUnsubModal();
     return;
   }
@@ -794,6 +900,9 @@ async function doUnsubscribeConfirm() {
       } else if (method.type === 'mail') {
         unsubscribeResult = await bg('unsubMail', { url: method.url, senderEmail: modalSenderEmail });
         ok = true;
+      } else if (method.type === 'embedded') {
+        unsubscribeResult = await bg('unsubEmbedded', { url: method.url });
+        ok = true;
       } else {
         unsubscribeResult = await bg('unsubWeb', { url: method.url });
         ok = true;
@@ -814,7 +923,7 @@ async function doUnsubscribeConfirm() {
     });
     toast(message, 'error');
     confirmBtn.disabled = false;
-    confirmBtn.textContent = modalMode === 'cleanup' ? 'Apply' : 'Unsubscribe';
+    confirmBtn.textContent = modalConfirmLabel();
     closeUnsubModal();
     loadStats();
     showErrorsView();
@@ -841,7 +950,7 @@ async function doUnsubscribeConfirm() {
       : `Unsubscribed, but ${stage} emails failed: ${e.message || e}. Use Cleanup to retry.`;
     toast(msg, 'error');
     confirmBtn.disabled = false;
-    confirmBtn.textContent = modalMode === 'cleanup' ? 'Apply' : 'Unsubscribe';
+    confirmBtn.textContent = modalConfirmLabel();
     closeUnsubModal();
     loadStats();
     loadSubs(currentFilter);
@@ -875,7 +984,7 @@ async function doUnsubscribeConfirm() {
     } else {
       toast(destination?.disabled ? 'Select an available destination folder' : 'Select a destination folder', 'info');
       confirmBtn.disabled = false;
-      confirmBtn.textContent = modalMode === 'cleanup' ? 'Apply' : 'Unsubscribe';
+      confirmBtn.textContent = modalConfirmLabel();
       return;
     }
   }
@@ -1116,6 +1225,14 @@ document.addEventListener('DOMContentLoaded', async () => {
 
   document.querySelectorAll('.filter-tab').forEach(tab => {
     tab.addEventListener('click', () => setFilter(tab.dataset.filter, tab));
+  });
+  document.getElementById('recipient-filter').addEventListener('change', (e) => {
+    currentRecipientFilter = e.target.value;
+    renderFilteredCards();
+  });
+  document.getElementById('sort-select').addEventListener('change', (e) => {
+    currentSort = e.target.value;
+    renderFilteredCards();
   });
 
   await loadDryRun();

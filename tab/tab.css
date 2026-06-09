@@ -91,8 +91,15 @@ body{display:flex;overflow:hidden}
 
 /* Main */
 #main{flex:1;height:100vh;overflow-y:auto;padding:24px}
-#main-header{margin-bottom:20px;display:flex;align-items:center;justify-content:space-between}
+#main-header{margin-bottom:20px;display:flex;align-items:flex-end;justify-content:space-between;gap:16px}
 #main-header h2{font-size:18px;font-weight:700}
+.list-controls{display:flex;align-items:flex-end;justify-content:flex-end;gap:10px;flex-wrap:wrap}
+.list-control{display:flex;flex-direction:column;gap:4px;color:var(--muted);font-size:11px;font-weight:600}
+.list-control select,.method-select{
+  min-width:170px;padding:7px 28px 7px 9px;border:1px solid var(--border);border-radius:7px;
+  background:var(--card);color:var(--text);font:inherit;outline:none;
+}
+.list-control select:focus,.method-select:focus{border-color:var(--accent)}
 
 #cards-grid{
   display:grid;grid-template-columns:repeat(auto-fill,minmax(380px,1fr));gap:16px;
@@ -104,7 +111,13 @@ body{display:flex;overflow:hidden}
   overflow:hidden;transition:border-color .15s,transform .15s,box-shadow .15s;
 }
 .card:hover{border-color:var(--accent);transform:translateY(-1px);box-shadow:0 4px 20px rgba(99,102,241,.12)}
-.card-body{padding:16px}
+.card-body{padding:16px;position:relative}
+.card-dismiss{
+  position:absolute;top:10px;right:10px;width:30px;height:30px;border:1px solid transparent;border-radius:7px;
+  background:transparent;color:var(--muted);cursor:pointer;font-size:16px;line-height:1;
+}
+.card-dismiss:hover{background:rgba(239,68,68,.12);border-color:rgba(239,68,68,.3);color:#f87171}
+.card-dismiss + .card-top{padding-right:28px}
 .card-top{display:flex;align-items:flex-start;gap:12px;margin-bottom:12px}
 .avatar{
   width:42px;height:42px;min-width:42px;border-radius:50%;
@@ -133,6 +146,18 @@ body{display:flex;overflow:hidden}
 }
 .card-accounts{font-size:11px;color:var(--muted)}
 .card-error{font-size:12px;color:#fecaca;background:rgba(239,68,68,.1);border:1px solid rgba(239,68,68,.25);border-radius:7px;padding:7px 9px;margin-top:10px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.evidence-toggle{margin-top:10px;border:0;background:transparent;color:#818cf8;font-size:11px;font-weight:600;cursor:pointer;text-decoration:underline;text-underline-offset:2px}
+.detection-evidence{display:none;border-top:1px solid var(--border);background:rgba(0,0,0,.22);padding:12px 16px;max-height:360px;overflow-y:auto}
+.detection-evidence.open{display:block}
+.evidence-item{padding:9px 0;border-bottom:1px solid var(--border)}
+.evidence-item:first-child{padding-top:0}
+.evidence-item:last-child{padding-bottom:0;border-bottom:0}
+.evidence-heading{display:flex;align-items:center;gap:6px;font-size:12px;font-weight:600;margin-bottom:5px}
+.evidence-heading>span:last-child{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.evidence-meta{display:flex;flex-direction:column;gap:2px;color:var(--muted);font-size:11px}
+.evidence-urls{margin-top:6px;padding:6px 8px;border-radius:6px;background:var(--border);font-size:10px;color:#cbd5e1;word-break:break-all}
+.evidence-message-id{margin-top:5px;color:var(--muted);font-size:10px;word-break:break-all}
+.evidence-empty{color:var(--muted);font-size:11px}
 
 .card-actions{
   display:flex;gap:8px;padding:12px 16px;border-top:1px solid var(--border);
@@ -230,6 +255,8 @@ label.modal-addr-row:hover{background:rgba(0,0,0,.3)}
 .modal-addr{flex:1;font-family:monospace;font-size:12px;color:var(--text)}
 .modal-method{font-size:10px;color:var(--muted);font-weight:600;padding:2px 6px;border-radius:6px;background:var(--border);white-space:nowrap}
 .modal-method.has-detail{cursor:help;text-decoration:underline dotted;text-underline-offset:2px}
+.method-select{flex:1;min-width:0}
+.method-help{font-size:11px;color:var(--muted);line-height:1.35;margin:4px 0 0 52px;word-break:break-word}
 .modal-addr-box{flex-direction:column;align-items:stretch;gap:6px;padding:8px 10px}
 .modal-kv{display:flex;align-items:center;gap:8px;font-size:13px}
 .modal-kv-label{color:var(--muted);font-size:12px;font-weight:600;min-width:44px}
