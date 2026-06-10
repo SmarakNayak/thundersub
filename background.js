@@ -21,6 +21,7 @@ let scanState = {
   stopped: false
 };
 const SESSION_ID = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
+const MESSAGE_LOOKUP_CONCURRENCY = 8;
 
 // ── Storage helpers ──────────────────────────────────────────────────────────
 let stateWriteQueue = Promise.resolve();
@@ -505,6 +506,7 @@ async function resolveCurrentMessageIds(groups, selectedFolders, traceId) {
   let targetedQueries = 0;
   let queryMs = 0;
   let slowestQueryMs = 0;
+  const lookupTasks = [];
 
   for (const g of selected) {
     if (g.sessionId === SESSION_ID) {
@@ -524,29 +526,42 @@ async function resolveCurrentMessageIds(groups, selectedFolders, traceId) {
     }
 
     for (const headerMessageId of headerIds) {
-      const queryStartedAt = Date.now();
-      let found = [];
-      try {
-        found = await queryByHeaderMessageId(g.folderId, headerMessageId);
-      } catch (e) {
-        console.warn('[ThunderSub] Failed to resolve message by header id', headerMessageId, e);
-      }
-      const duration = Date.now() - queryStartedAt;
-      targetedQueries++;
-      queryMs += duration;
-      slowestQueryMs = Math.max(slowestQueryMs, duration);
-      if (found.length === 0) {
-        unresolvedHeaderIds.add(headerMessageId);
-        continue;
-      }
-      for (const message of found) ids.add(message.id);
+      lookupTasks.push({ folderId: g.folderId, headerMessageId });
     }
   }
+
+  const lookupConcurrency = Math.min(MESSAGE_LOOKUP_CONCURRENCY, lookupTasks.length);
+  const workers = Array.from(
+    { length: lookupConcurrency },
+    async () => {
+      while (lookupTasks.length > 0) {
+        const { folderId, headerMessageId } = lookupTasks.pop();
+        const queryStartedAt = Date.now();
+        let found = [];
+        try {
+          found = await queryByHeaderMessageId(folderId, headerMessageId);
+        } catch (e) {
+          console.warn('[ThunderSub] Failed to resolve message by header id', headerMessageId, e);
+        }
+        const duration = Date.now() - queryStartedAt;
+        targetedQueries++;
+        queryMs += duration;
+        slowestQueryMs = Math.max(slowestQueryMs, duration);
+        if (found.length === 0) {
+          unresolvedHeaderIds.add(headerMessageId);
+          continue;
+        }
+        for (const message of found) ids.add(message.id);
+      }
+    }
+  );
+  await Promise.all(workers);
 
   tracePhase(traceId, 'resolve-message-ids', startedAt, {
     groups: selected.length,
     sessionGroups,
     targetedQueries,
+    concurrency: lookupConcurrency,
     queryMs,
     slowestQueryMs,
     resolved: ids.size,
@@ -1066,44 +1081,30 @@ function dryRunUnsubscribe(type, url) {
 //
 // selectedFolders: [{accountName, folderName}, ...] — which source folders to act on (all if empty)
 
-async function deleteMessagesInBatches(ids) {
-  let deleted = 0;
-  let failed = 0;
-  const batchSize = 50;
-  for (let i = 0; i < ids.length; i += batchSize) {
-    const batch = ids.slice(i, i + batchSize);
+async function deleteMessages(ids) {
+  try {
     try {
-      try {
-        await browser.messages.delete(batch, { deletePermanently: false });
-      } catch (e) {
-        // The options-object form requires TB 137+; older versions take a
-        // boolean skipTrash as the second argument.
-        await browser.messages.delete(batch, false);
-      }
-      deleted += batch.length;
+      await browser.messages.delete(ids, { deletePermanently: false });
     } catch (e) {
-      failed += batch.length;
-      console.warn('Failed to delete batch:', e);
+      // The options-object form requires TB 137+; older versions take a
+      // boolean skipTrash as the second argument.
+      await browser.messages.delete(ids, false);
     }
+    return { deleted: ids.length, failed: 0 };
+  } catch (e) {
+    console.warn('Failed to delete messages:', e);
+    return { deleted: 0, failed: ids.length };
   }
-  return { deleted, failed };
 }
 
-async function moveMessagesInBatches(ids, destinationFolderId) {
-  let moved = 0;
-  let failed = 0;
-  const batchSize = 50;
-  for (let i = 0; i < ids.length; i += batchSize) {
-    const batch = ids.slice(i, i + batchSize);
-    try {
-      await browser.messages.move(batch, destinationFolderId);
-      moved += batch.length;
-    } catch (e) {
-      failed += batch.length;
-      console.warn('Failed to move batch:', e);
-    }
+async function moveMessages(ids, destinationFolderId) {
+  try {
+    await browser.messages.move(ids, destinationFolderId);
+    return { moved: ids.length, failed: 0 };
+  } catch (e) {
+    console.warn('Failed to move messages:', e);
+    return { moved: 0, failed: ids.length };
   }
-  return { moved, failed };
 }
 
 async function findJunkFolderId(account) {
@@ -1172,11 +1173,11 @@ async function junkEmails(senderEmail, recipientAddress) {
 
     const junkFolderId = junkFolderByAccountName[group.accountName];
     if (junkFolderId) {
-      const { moved, failed } = await moveMessagesInBatches(ids, junkFolderId);
+      const { moved, failed } = await moveMessages(ids, junkFolderId);
       movedToSpam += moved;
       failedTotal += failed;
     } else {
-      const { deleted: d, failed } = await deleteMessagesInBatches(ids);
+      const { deleted: d, failed } = await deleteMessages(ids);
       deleted += d;
       failedTotal += failed;
     }
@@ -1221,7 +1222,7 @@ async function deleteEmails(senderEmail, recipientAddress, messageGroups, select
   if (ids.length === 0) return { deleted: 0 };
 
   startedAt = Date.now();
-  const { deleted, failed } = await deleteMessagesInBatches(ids);
+  const { deleted, failed } = await deleteMessages(ids);
   tracePhase(traceId, 'delete-messages-api', startedAt, { requested: ids.length, deleted, failed });
 
   if (failed > 0) {
@@ -1258,7 +1259,7 @@ async function moveEmails(senderEmail, recipientAddress, messageGroups, selected
   let tracked;
   try {
     startedAt = Date.now();
-    ({ moved, failed } = await moveMessagesInBatches(ids, destinationFolderId));
+    ({ moved, failed } = await moveMessages(ids, destinationFolderId));
     tracePhase(traceId, 'move-messages-api', startedAt, { requested: ids.length, moved, failed });
   } finally {
     // Give late onMoved events a moment to arrive, then stop listening.
