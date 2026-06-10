@@ -117,17 +117,17 @@ They show the real tab UI (unmodified `tab/tab.html`/`tab.css`/`tab.js`) rendere
 demo data (`.example` senders, `alex@example.net` recipient) — regenerate any time with
 `bash store/screenshots/make.sh` (needs chromium or nix).
 
-## Release notes (initial release)
+## Release notes (1.0.2)
 
 ```
 Initial public release.
 
 • Scan all accounts and folders for subscriptions (List-Unsubscribe headers + embedded links)
 • One-click (RFC 8058), email, and browser unsubscribe methods, with retry via any detected method
+• Cleanup actions to delete, move, or mark a sender's messages as Junk
 • Alias-aware grouping by sender and receiving address
-• Cleanup: delete emails to Trash or move them to a folder, per source folder
 • Optional dry-run mode to preview every action before it runs
-• Keep / dismiss / review-again workflow with a stats dashboard
+• Reliable move tracking, folder creation, and move-destination validation
 
 Compatible with Thunderbird 128 and later.
 ```
@@ -137,6 +137,8 @@ Compatible with Thunderbird 128 and later.
 ## Notes to reviewers (paste into "Notes to Reviewer" on upload)
 
 ```
+Version 1.0.2 supersedes the pending 1.0 and 1.0.1 submissions. Please review 1.0.2 for the initial public release.
+
 Source is plain, unminified JavaScript with no build step and no third-party libraries — the uploaded XPI is the source (repo: https://github.com/SmarakNayak/thundersub).
 
 License: MPL-2.0. Portions of the unsubscribe detection and unsubscribe methods in background.js are adapted from BetterUnsubscribe by Luc Bennett (MPL-2.0, https://github.com/LucBennett/BetterUnsubscribe), with attribution in the file header and README. ThunderSub is an independent add-on with a different scope (whole-mailbox scanning, review queue, cleanup).

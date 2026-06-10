@@ -2,7 +2,7 @@
   "manifest_version": 2,
   "name": "ThunderSub",
   "description": "Manage email subscriptions in Thunderbird — scan, unsubscribe, and clean up.",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "author": "SmarakNayak",
   "homepage_url": "https://github.com/SmarakNayak/thundersub",
   "browser_specific_settings": {
