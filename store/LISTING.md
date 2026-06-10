@@ -117,7 +117,7 @@ They show the real tab UI (unmodified `tab/tab.html`/`tab.css`/`tab.js`) rendere
 demo data (`.example` senders, `alex@example.net` recipient) — regenerate any time with
 `bash store/screenshots/make.sh` (needs chromium or nix).
 
-## Release notes (1.0.2)
+## Release notes (1.0.3)
 
 ```
 Initial public release.
@@ -128,6 +128,7 @@ Initial public release.
 • Alias-aware grouping by sender and receiving address
 • Optional dry-run mode to preview every action before it runs
 • Keep / dismiss / review-again workflow with a stats dashboard
+• Live progress with cancellation for scans and cleanup operations
 
 Compatible with Thunderbird 128 and later.
 ```
@@ -137,7 +138,7 @@ Compatible with Thunderbird 128 and later.
 ## Notes to reviewers (paste into "Notes to Reviewer" on upload)
 
 ```
-Version 1.0.2 supersedes the pending 1.0 and 1.0.1 submissions. Please review 1.0.2 for the initial public release.
+Version 1.0.3 supersedes the pending 1.0, 1.0.1, and 1.0.2 submissions. Please review 1.0.3 for the initial public release.
 
 Source is plain, unminified JavaScript with no build step and no third-party libraries — the uploaded XPI is the source (repo: https://github.com/SmarakNayak/thundersub).
 
@@ -145,6 +146,7 @@ License: MPL-2.0. Portions of the unsubscribe detection and unsubscribe methods 
 
 Permission justifications:
 - messagesRead: read headers/bodies to detect List-Unsubscribe headers and embedded unsubscribe links.
+- messagesUpdate: set the junk flag (messages.update({junk: true})) when the user picks "Mark all emails as junk", so the account's spam filter is trained before the messages are moved to the junk folder.
 - messagesMove / messagesDelete: the optional cleanup actions (move to a user-chosen folder / delete to Trash; deletePermanently is never used).
 - accountsRead / accountsFolders: enumerate accounts/folders for scanning and for the move-destination folder picker (browser.folders.create for the "new folder" option).
 - compose / compose.send: prepare mailto: unsubscribe emails. They open as drafts by default; compose.sendMessage is only called if the user enables the explicit "auto-send" toggle.
