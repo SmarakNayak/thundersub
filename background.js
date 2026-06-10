@@ -906,8 +906,9 @@ async function runScan() {
     for (const [key, s] of Object.entries(subs)) {
       const prev = existingMap[key];
 
-      // A rescan re-evaluates everything, so prior errors are cleared: only
-      // 'keep'/'unsubscribed' decisions (and their dispose state) carry over.
+      // A rescan re-evaluates everything, so prior errors and dismissals are
+      // cleared: only 'keep'/'unsubscribed' decisions (and their dispose
+      // state) carry over.
       const decision = (prev && (prev.decision === 'keep' || prev.decision === 'unsubscribed'))
         ? prev.decision : 'pending';
       const carryPrevState = !!prev && decision === prev.decision;
@@ -936,7 +937,7 @@ async function runScan() {
         dispose: carryPrevState ? prev.dispose : null,
         cleanupDestination: carryPrevState ? prev.cleanupDestination : null,
         error: carryPrevState ? prev.error : null,
-        dismissed: prev ? !!prev.dismissed : false,
+        dismissed: false,
         updatedAt: now
       });
     }
