@@ -854,6 +854,19 @@ async function doUnsubscribeConfirm() {
   const method = modalSelectedMethod || getBestMethod(sub);
   const destination = dispose === 'move' ? getSelectedDestination() : null;
 
+  // Validate the move destination before anything fires — especially the
+  // unsubscribe request, which cannot be taken back.
+  if (dispose === 'move' && selectedFolders.length > 0) {
+    if (!destination) {
+      toast('Select a destination folder', 'info');
+      return;
+    }
+    if (destination.disabled) {
+      toast('Select an available destination folder', 'info');
+      return;
+    }
+  }
+
   const confirmBtn = document.getElementById('modal-confirm');
   confirmBtn.disabled = true;
   confirmBtn.textContent = 'Checking...';
@@ -868,18 +881,6 @@ async function doUnsubscribeConfirm() {
   }
 
   if (dryRun) {
-    if (dispose === 'move' && selectedFolders.length > 0 && !destination) {
-      toast('Select a destination folder', 'info');
-      confirmBtn.disabled = false;
-      confirmBtn.textContent = modalConfirmLabel();
-      return;
-    }
-    if (destination?.disabled) {
-      toast('Select an available destination folder', 'info');
-      confirmBtn.disabled = false;
-      confirmBtn.textContent = modalConfirmLabel();
-      return;
-    }
     toast(dryRunSummary(sub, method, dispose, selectedFolders, destination), 'info');
     confirmBtn.disabled = false;
     confirmBtn.textContent = modalConfirmLabel();
@@ -970,33 +971,26 @@ async function doUnsubscribeConfirm() {
       return;
     }
   } else if (dispose === 'move' && selectedFolders.length > 0) {
-    if (destination && !destination.disabled) {
-      try {
-        const result = await bg('moveEmails', {
-          senderEmail: modalSenderEmail,
-          recipientAddress: modalRecipientAddress,
-          selectedFolders,
-          destinationFolderId: destination.id,
-          destination
-        });
-        if (result?.dryRun) {
-          toast(`Dry run: would move ${result.moved || 0} emails`, 'info');
-        } else if (result) {
-          const missing = (result.moved || 0) - (result.resolvedCount || 0);
-          if (missing > 0 && missing >= (result.moved || 0)) {
-            toast('Moved emails, but could not locate them in the destination yet. Run a scan to manage them again.', 'info');
-          } else if (missing > 0) {
-            toast(`Moved ${result.moved} emails, but ${missing} could not be located in the destination yet. Run a scan to manage them again.`, 'info');
-          }
+    try {
+      const result = await bg('moveEmails', {
+        senderEmail: modalSenderEmail,
+        recipientAddress: modalRecipientAddress,
+        selectedFolders,
+        destinationFolderId: destination.id,
+        destination
+      });
+      if (result?.dryRun) {
+        toast(`Dry run: would move ${result.moved || 0} emails`, 'info');
+      } else if (result) {
+        const missing = (result.moved || 0) - (result.resolvedCount || 0);
+        if (missing > 0 && missing >= (result.moved || 0)) {
+          toast('Moved emails, but could not locate them in the destination yet. Run a scan to manage them again.', 'info');
+        } else if (missing > 0) {
+          toast(`Moved ${result.moved} emails, but ${missing} could not be located in the destination yet. Run a scan to manage them again.`, 'info');
         }
-      } catch (e) {
-        await handleCleanupFailure('moving', e);
-        return;
       }
-    } else {
-      toast(destination?.disabled ? 'Select an available destination folder' : 'Select a destination folder', 'info');
-      confirmBtn.disabled = false;
-      confirmBtn.textContent = modalConfirmLabel();
+    } catch (e) {
+      await handleCleanupFailure('moving', e);
       return;
     }
   }
