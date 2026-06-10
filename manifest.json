@@ -4,6 +4,7 @@
   "description": "Manage email subscriptions in Thunderbird — scan, unsubscribe, and clean up.",
   "version": "2.0",
   "author": "SmarakNayak",
+  "homepage_url": "https://github.com/SmarakNayak/thundersub",
   "browser_specific_settings": {
     "gecko": {
       "id": "thundersub@smaraknayak",
