@@ -42,11 +42,11 @@ async function saveLastScan(lastScan) {
 
 async function getDryRun() {
   const result = await browser.storage.local.get('dryRun');
-  return result.dryRun !== false;
+  return result.dryRun === true;
 }
 
 async function setDryRun(dryRun) {
-  const enabled = dryRun !== false;
+  const enabled = dryRun === true;
   await browser.storage.local.set({ dryRun: enabled });
   return { dryRun: enabled };
 }

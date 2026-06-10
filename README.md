@@ -51,8 +51,8 @@ Unsubscribing stops *future* email. ThunderSub also handles the past:
 
 If a cleanup fails (folders move, servers hiccup), your unsubscribe still counts — the emails stay put and a **Cleanup** button lets you retry just that part.
 
-### 🛟 Dry run — on by default
-ThunderSub ships in **dry-run mode**. Every unsubscribe, delete, and move is simulated and reported ("would delete 142 emails") without touching anything. Explore the whole workflow risk-free, then flip the toggle when you trust it.
+### 🛟 Dry-run mode
+Want to explore risk-free first? Flip the **Dry Run** toggle and every unsubscribe, delete, and move is simulated and reported ("would delete 142 emails") without touching anything — try the whole workflow end to end, then switch it off when you trust it.
 
 ### 📊 A review dashboard, not a black box
 - Stats at a glance: emails scanned, subscriptions found, pending / kept / unsubscribed / errors.
@@ -92,7 +92,7 @@ Then in Thunderbird: **≡ Menu → Add-ons and Themes** → gear icon → **Ins
 3. Work through the **Pending** tab:
    - **Keep Subscription** for the ones you want,
    - **Unsubscribe** for the rest — choose what happens to existing emails (delete / move / keep) in the same dialog.
-4. Everything is a dry run until you switch off the **Dry run** toggle in the sidebar — so click around freely first.
+4. Want to click around freely first? Switch on the **Dry Run** toggle in the sidebar — every action is then simulated and reported instead of executed.
 
 ## Permissions explained
 
@@ -108,7 +108,7 @@ Then in Thunderbird: **≡ Menu → Add-ons and Themes** → gear icon → **Ins
 ## FAQ
 
 **Is it safe to let it delete emails?**
-Deletes go to your Trash folder, never permanent deletion — and with dry run on (the default), nothing is touched at all. Move operations re-resolve messages by their stable RFC 5322 Message-ID right before acting, so stale data from an old scan can't delete the wrong thing.
+Deletes go to your Trash folder, never permanent deletion — and with the dry-run toggle on, nothing is touched at all. Move operations re-resolve messages by their stable RFC 5322 Message-ID right before acting, so stale data from an old scan can't delete the wrong thing.
 
 **Will unsubscribe emails be sent without me seeing them?**
 No. By default, email-based unsubscribes open as a **draft** in a compose window for you to review and send. There's an explicit opt-in toggle if you'd rather they send automatically.

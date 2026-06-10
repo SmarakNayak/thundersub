@@ -61,8 +61,8 @@ ThunderSub auto-picks the best available method: silent one-click POST, unsubscr
 <b>🧹 Cleanup included</b>
 Delete a sender's entire back catalog (to Trash, never permanently) or move it to any folder — with per-folder control over which copies are touched.
 
-<b>🛟 Dry run by default</b>
-Out of the box, every unsubscribe, delete, and move is simulated and reported without touching anything. Explore the whole workflow risk-free, then flip the toggle.
+<b>🛟 Dry-run mode</b>
+Flip one toggle and every unsubscribe, delete, and move is simulated and reported without touching anything — explore the whole workflow risk-free, then switch it off when you're ready.
 
 <b>🔒 Private by design</b>
 All data stays in Thunderbird's local storage. No cloud service, no account, no telemetry. The only network requests are the unsubscribe actions you explicitly trigger. A Full Reset wipes everything ThunderSub stored.
@@ -104,16 +104,18 @@ ThunderSub does not collect, store, or transmit any user data. Scan results and 
 
 Upload `store/icon-128.png` (rendered from `icons/icon-64.svg`; `store/icon-64.png` also available).
 
-## Screenshots (capture before submitting)
+## Screenshots
 
-ATN strongly recommends screenshots. Suggested set, in order:
+Ready to upload from `store/screenshots/`, in this order:
 
-1. **Dashboard with pending cards** — the money shot: stats row + grid of subscription cards.
-2. **Unsubscribe modal** — method line, folder checkboxes, delete/move/keep options.
-3. **Scan in progress** — progress bar, live counters, Pause/Stop.
-4. **Unsubscribed tab** — cards with Cleanup/Retry/Review Again, showing the workflow continues after unsubscribing.
+1. `01-dashboard.png` — dashboard with pending subscription cards and stats.
+2. `02-unsubscribe-modal.png` — unsubscribe modal: method, source-folder checkboxes, delete/move/keep.
+3. `03-scan-progress.png` — scan in progress with live counters and Pause/Stop.
+4. `04-unsubscribed.png` — Unsubscribed tab with Cleanup/Retry/Review Again actions.
 
-Use a clean profile with believable demo newsletters; avoid real personal addresses in shots.
+They show the real tab UI (unmodified `tab/tab.html`/`tab.css`/`tab.js`) rendered with fictional
+demo data (`.example` senders, `alex@example.net` recipient) — regenerate any time with
+`bash store/screenshots/make.sh` (needs chromium or nix).
 
 ## Release notes for 2.0
 
@@ -146,5 +148,5 @@ Permission justifications:
 
 No remote code is loaded or executed. innerHTML is used for UI rendering only, with all dynamic values passed through an HTML-escaping helper (esc() in tab/tab.js). No user data leaves the machine.
 
-Testing tip: the add-on starts in dry-run mode — all actions are simulated and reported via toasts. Click the toolbar button → "Open ThunderSub" → "Scan Emails" against any profile with newsletter mail.
+Testing tip: click the toolbar button → "Open ThunderSub" → "Scan Emails" against any profile with newsletter mail. Enabling the "Dry Run" toggle in the sidebar makes every action simulated and reported via toasts instead of executed.
 ```

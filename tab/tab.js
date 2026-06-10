@@ -7,7 +7,7 @@
 let currentFilter = 'pending';
 let scanPollTimer = null;
 let subsCache = [];
-let dryRun = true;
+let dryRun = false;
 let autoSendUnsubscribeEmails = false;
 let hasScannedBefore = false;
 let scanInProgress = false;
@@ -72,18 +72,18 @@ function senderLabel(sub) {
 async function loadDryRun() {
   try {
     const result = await bg('getDryRun');
-    dryRun = result.dryRun !== false;
+    dryRun = result.dryRun === true;
     document.getElementById('dry-run-toggle').checked = dryRun;
   } catch (e) {
-    dryRun = true;
-    document.getElementById('dry-run-toggle').checked = true;
+    dryRun = false;
+    document.getElementById('dry-run-toggle').checked = false;
   }
 }
 
 async function updateDryRun(enabled) {
   try {
     const result = await bg('setDryRun', { dryRun: enabled });
-    dryRun = result.dryRun !== false;
+    dryRun = result.dryRun === true;
     document.getElementById('dry-run-toggle').checked = dryRun;
     toast(dryRun ? 'Dry run enabled' : 'Dry run disabled', dryRun ? 'info' : 'success');
   } catch (e) {
@@ -705,9 +705,9 @@ function renderFolderNodes(folders, depth) {
     const name = (f.name || '').toLowerCase();
     const path = (f.path || '').toLowerCase();
     const isMoveTargetDisabled =
-      // name === '[gmail]' ||
-      // path === '[gmail]' ||
-      // path === '/[gmail]' ||
+      name === '[gmail]' ||
+      path === '[gmail]' ||
+      path === '/[gmail]' ||
       name === 'all mail' ||
       path === 'all mail' ||
       path.endsWith('/all mail') ||
@@ -858,11 +858,11 @@ async function doUnsubscribeConfirm() {
 
   try {
     const result = await bg('getDryRun');
-    dryRun = result.dryRun !== false;
+    dryRun = result.dryRun === true;
     document.getElementById('dry-run-toggle').checked = dryRun;
   } catch (e) {
-    dryRun = true;
-    document.getElementById('dry-run-toggle').checked = true;
+    dryRun = false;
+    document.getElementById('dry-run-toggle').checked = false;
   }
 
   if (dryRun) {
