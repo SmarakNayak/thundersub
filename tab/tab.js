@@ -663,8 +663,6 @@ function finishModalCancellation(trace, message = 'Operation cancelled') {
   confirmBtn.textContent = modalConfirmLabel();
   resetModalProgress();
   closeUnsubModal();
-  loadStats();
-  loadSubs(currentFilter);
   toast(message, 'info');
   trace.log('unsubscribe:cancelled');
 }
@@ -1145,6 +1143,8 @@ async function doUnsubscribeConfirm() {
         decision: 'unsubscribed',
         dispose: null
       });
+      sub.dispose = null;
+      updateCachedDecision(sub, 'unsubscribed');
     }
     finishModalCancellation(trace, ok && modalMode !== 'cleanup'
       ? 'Unsubscribed; remaining actions cancelled'
@@ -1188,8 +1188,8 @@ async function doUnsubscribeConfirm() {
       dispose: null,
       error: outcomeDecision === 'error' ? sub.error : undefined
     });
-    updateDecisionStats(sub.decision, outcomeDecision);
-    sub.decision = outcomeDecision;
+    sub.dispose = null;
+    updateCachedDecision(sub, outcomeDecision);
     const msg = modalMode === 'cleanup'
       ? `Cleanup failed while ${stage} emails: ${e.message || e}. Use Cleanup to retry.`
       : `Unsubscribed, but ${stage} emails failed: ${e.message || e}. Use Cleanup to retry.`;
@@ -1198,7 +1198,6 @@ async function doUnsubscribeConfirm() {
     confirmBtn.textContent = modalConfirmLabel();
     resetModalProgress();
     closeUnsubModal();
-    loadSubs(currentFilter);
     trace.log('unsubscribe:cleanup-failed', undefined, { stage });
   }
 
@@ -1223,6 +1222,8 @@ async function doUnsubscribeConfirm() {
             dispose: null,
             error: outcomeDecision === 'error' ? sub.error : undefined
           });
+          sub.dispose = null;
+          updateCachedDecision(sub, outcomeDecision);
         }
         finishModalCancellation(trace);
         return;
@@ -1254,6 +1255,8 @@ async function doUnsubscribeConfirm() {
             dispose: null,
             error: outcomeDecision === 'error' ? sub.error : undefined
           });
+          sub.dispose = null;
+          updateCachedDecision(sub, outcomeDecision);
         }
         finishModalCancellation(trace);
         return;
@@ -1283,10 +1286,6 @@ async function doUnsubscribeConfirm() {
     return;
   }
 
-  if (modalCancelRequested) {
-    finishModalCancellation(trace, 'Current action completed before cancellation');
-    return;
-  }
   if (cleanupResult?.messageGroups) {
     sub.messageGroups = cleanupResult.messageGroups;
     sub.emailCount = cleanupResult.emailCount;
@@ -1294,6 +1293,11 @@ async function doUnsubscribeConfirm() {
   sub.dispose = dispose;
   sub.cleanupDestination = destination;
   updateCachedDecision(sub, outcomeDecision);
+
+  if (modalCancelRequested) {
+    finishModalCancellation(trace, 'Current action completed before cancellation');
+    return;
+  }
 
   const name = sub.senderName || sub.senderEmail;
   if (modalMode === 'cleanup') {
