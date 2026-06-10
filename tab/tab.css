@@ -182,6 +182,7 @@ body{display:flex;overflow:hidden}
 .btn-success{background:var(--success);color:#fff;border-color:var(--success)}
 .btn-muted{border-color:var(--border);background:transparent;color:var(--muted)}
 .btn-muted:hover{background:var(--border);color:var(--text)}
+.btn:disabled,.btn:disabled:hover{opacity:.5;cursor:not-allowed;pointer-events:none}
 
 /* Inline expand panel */
 .expand-panel{
