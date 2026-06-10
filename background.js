@@ -52,6 +52,36 @@ async function clearSubscriptionDecisions() {
   await write;
 }
 
+async function loadSubscriptionsWithDecisionSnapshot() {
+  await decisionWriteQueue;
+  const result = await browser.storage.local.get(['subscriptions', 'subscriptionDecisions']);
+  const decisions = result.subscriptionDecisions || {};
+  const subscriptions = (result.subscriptions || []).map(sub => {
+    const decision = decisions[subscriptionKey(sub.senderEmail, sub.recipientAddress)];
+    return decision ? { ...sub, ...decision } : sub;
+  });
+  return { subscriptions, decisions };
+}
+
+async function saveRescanSubscriptions(subs, incorporatedDecisions) {
+  const write = decisionWriteQueue.then(async () => {
+    const result = await browser.storage.local.get('subscriptionDecisions');
+    const current = result.subscriptionDecisions || {};
+    for (const [key, incorporated] of Object.entries(incorporatedDecisions)) {
+      // Preserve a decision written after the rescan snapshot.
+      if (JSON.stringify(current[key]) === JSON.stringify(incorporated)) {
+        delete current[key];
+      }
+    }
+    await browser.storage.local.set({
+      subscriptions: subs,
+      subscriptionDecisions: current
+    });
+  });
+  decisionWriteQueue = write.catch(() => {});
+  await write;
+}
+
 async function getLastScan() {
   const result = await browser.storage.local.get('lastScan');
   return result.lastScan || null;
@@ -823,7 +853,8 @@ async function runScan() {
     }))));
 
     // Merge with existing stored subscriptions (preserve decisions)
-    const existing = await loadSubscriptions();
+    const { subscriptions: existing, decisions: incorporatedDecisions } =
+      await loadSubscriptionsWithDecisionSnapshot();
     const existingMap = {};
     for (const sub of existing) {
       const k = `${sub.senderEmail}|${sub.recipientAddress || ''}`;
@@ -878,10 +909,9 @@ async function runScan() {
       }
     }
 
-    await saveSubscriptions(merged);
-    // The merged scan result now contains the latest decisions. Clear the
-    // lightweight overlays so old pending/error states cannot outlive a rescan.
-    await clearSubscriptionDecisions();
+    // Remove only the decision overlays included in this merge. Decisions made
+    // after the snapshot stay overlaid on the new scan result.
+    await saveRescanSubscriptions(merged, incorporatedDecisions);
 
     const finalMessagesScanned = scanState.messagesScanned;
     const finalSendersFound = Object.keys(subs).length;
