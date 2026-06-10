@@ -392,6 +392,7 @@ function buildCard(s) {
 <div class="card" id="${cardId}" data-sender-email="${esc(s.senderEmail)}" data-recipient-address="${esc(s.recipientAddress || '')}">
   <div class="card-body">
     ${dismissable ? `<button class="card-dismiss js-dismiss" title="Dismiss and stop tracking this subscription" aria-label="Dismiss and stop tracking this subscription" ${attrs}>&#128465;</button>` : ''}
+    ${s.decision === 'pending' && subHasMessages(s) ? `<button class="card-dismiss js-junk" title="Phishing or spam? Mark all emails as junk and delete them — the sender is never contacted" aria-label="Mark all emails as junk and delete them" ${attrs}>&#128293;</button>` : ''}
     <div class="card-top">
       <div class="avatar" style="background:${color}">${esc(ini)}</div>
       <div class="card-info">
@@ -470,7 +471,33 @@ function attachCardListeners() {
       await doDismiss(btn.dataset.senderEmail, btn.dataset.recipientAddress);
       return;
     }
+
+    if (btn.classList.contains('js-junk')) {
+      await doJunk(btn.dataset.senderEmail, btn.dataset.recipientAddress);
+      return;
+    }
   });
+}
+
+async function doJunk(senderEmail, recipientAddress) {
+  const sub = subsCache.find(s => s.senderEmail === senderEmail && s.recipientAddress === recipientAddress);
+  if (!sub) return;
+  const count = (sub.messageGroups || []).reduce((sum, g) => sum + g.messageIds.length, 0);
+  const name = sub.senderName || senderEmail;
+  if (!confirm(`Mark ${count} emails from ${name} as junk and delete them? The sender will not be contacted.`)) return;
+
+  try {
+    const result = await bg('junkEmails', { senderEmail, recipientAddress });
+    if (result?.dryRun) {
+      toast(`Dry run: would mark ${result.junked || 0} emails as junk and delete them. No changes made.`, 'info');
+    } else {
+      toast(`Marked ${result.junked || 0} emails from ${name} as junk and deleted them`, 'success');
+      loadStats();
+      loadSubs(currentFilter);
+    }
+  } catch (e) {
+    toast('Failed to junk emails: ' + (e.message || e), 'error');
+  }
 }
 
 async function doDismiss(senderEmail, recipientAddress) {

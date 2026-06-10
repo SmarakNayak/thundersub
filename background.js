@@ -890,19 +890,7 @@ function dryRunUnsubscribe(type, url) {
 //
 // selectedFolders: [{accountName, folderName}, ...] — which source folders to act on (all if empty)
 
-async function deleteEmails(senderEmail, recipientAddress, selectedFolders) {
-  const subs = await loadSubscriptions();
-  const sub = subs.find(s => s.senderEmail === senderEmail && s.recipientAddress === recipientAddress);
-  if (!sub || !sub.messageGroups || sub.messageGroups.length === 0) {
-    return { deleted: 0 };
-  }
-
-  const { ids, unresolvedHeaderIds } = await resolveCurrentMessageIds(sub.messageGroups, selectedFolders);
-  if (unresolvedHeaderIds.length > 0) {
-    console.warn(`[ThunderSub] ${unresolvedHeaderIds.length} message(s) could not be re-resolved before delete (moved or removed):`, unresolvedHeaderIds);
-  }
-  if (ids.length === 0) return { deleted: 0 };
-
+async function deleteMessagesInBatches(ids) {
   let deleted = 0;
   let failed = 0;
   const batchSize = 50;
@@ -922,6 +910,76 @@ async function deleteEmails(senderEmail, recipientAddress, selectedFolders) {
       console.warn('Failed to delete batch:', e);
     }
   }
+  return { deleted, failed };
+}
+
+// Silent handling for phishing/spam senders: flag every message as junk and
+// delete to Trash. The sender is never contacted, so the address is never
+// confirmed active. The subscription is dismissed; deleted messages leave
+// the scanned folders, so the sender only resurfaces if new mail arrives.
+async function junkEmails(senderEmail, recipientAddress) {
+  const subs = await loadSubscriptions();
+  const sub = subs.find(s => s.senderEmail === senderEmail && s.recipientAddress === recipientAddress);
+  if (!sub || !sub.messageGroups || sub.messageGroups.length === 0) {
+    return { junked: 0, deleted: 0 };
+  }
+
+  const { ids, unresolvedHeaderIds } = await resolveCurrentMessageIds(sub.messageGroups, null);
+  if (unresolvedHeaderIds.length > 0) {
+    console.warn(`[ThunderSub] ${unresolvedHeaderIds.length} message(s) could not be re-resolved before junking:`, unresolvedHeaderIds);
+  }
+  if (ids.length === 0) return { junked: 0, deleted: 0 };
+
+  let junked = 0;
+  for (const id of ids) {
+    try {
+      await browser.messages.update(id, { junk: true });
+      junked++;
+    } catch (e) {
+      console.warn('Failed to mark message as junk:', e);
+    }
+  }
+
+  const { deleted, failed } = await deleteMessagesInBatches(ids);
+  if (failed > 0) {
+    // Junk flags already set are harmless; keep groups so a retry can finish.
+    throw new Error(`Failed to delete ${failed} of ${ids.length} emails.`);
+  }
+
+  sub.messageGroups = [];
+  sub.emailCount = 0;
+  sub.dismissed = true;
+  sub.updatedAt = new Date().toISOString();
+  await saveSubscriptions(subs);
+
+  return { junked, deleted };
+}
+
+async function dryRunJunkEmails(senderEmail, recipientAddress) {
+  const subs = await loadSubscriptions();
+  const sub = subs.find(s => s.senderEmail === senderEmail && s.recipientAddress === recipientAddress);
+  if (!sub || !sub.messageGroups || sub.messageGroups.length === 0) {
+    return { junked: 0, deleted: 0, dryRun: true };
+  }
+  const ids = getIdsForFolders(sub.messageGroups, null);
+  console.log(`[DRY RUN] Would mark ${ids.length} emails from ${sub.senderName || ''} <${senderEmail}> → ${recipientAddress} as junk and delete them`);
+  return { junked: ids.length, deleted: ids.length, dryRun: true };
+}
+
+async function deleteEmails(senderEmail, recipientAddress, selectedFolders) {
+  const subs = await loadSubscriptions();
+  const sub = subs.find(s => s.senderEmail === senderEmail && s.recipientAddress === recipientAddress);
+  if (!sub || !sub.messageGroups || sub.messageGroups.length === 0) {
+    return { deleted: 0 };
+  }
+
+  const { ids, unresolvedHeaderIds } = await resolveCurrentMessageIds(sub.messageGroups, selectedFolders);
+  if (unresolvedHeaderIds.length > 0) {
+    console.warn(`[ThunderSub] ${unresolvedHeaderIds.length} message(s) could not be re-resolved before delete (moved or removed):`, unresolvedHeaderIds);
+  }
+  if (ids.length === 0) return { deleted: 0 };
+
+  const { deleted, failed } = await deleteMessagesInBatches(ids);
 
   if (failed > 0) {
     throw new Error(`Failed to delete ${failed} of ${ids.length} emails.`);
@@ -1214,6 +1272,10 @@ browser.runtime.onMessage.addListener((request, sender) => {
     case 'dismiss':
       return dismissSubscription(request.senderEmail, request.recipientAddress)
         .then(() => ({ ok: true }));
+
+    case 'junkEmails':
+      return getDryRun().then(dryRun => (dryRun ? dryRunJunkEmails : junkEmails)(
+        request.senderEmail, request.recipientAddress));
 
     case 'deleteEmails':
       return getDryRun().then(dryRun => (dryRun ? dryRunDeleteEmails : deleteEmails)(
