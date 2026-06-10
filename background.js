@@ -849,7 +849,13 @@ async function deleteEmails(senderEmail, recipientAddress, selectedFolders) {
   for (let i = 0; i < ids.length; i += batchSize) {
     const batch = ids.slice(i, i + batchSize);
     try {
-      await browser.messages.delete(batch, { deletePermanently: false });
+      try {
+        await browser.messages.delete(batch, { deletePermanently: false });
+      } catch (e) {
+        // The options-object form requires TB 137+; older versions take a
+        // boolean skipTrash as the second argument.
+        await browser.messages.delete(batch, false);
+      }
       deleted += batch.length;
     } catch (e) {
       failed += batch.length;

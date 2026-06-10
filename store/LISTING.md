@@ -106,12 +106,12 @@ Upload `store/icon-128.png` (rendered from `icons/icon-64.svg`; `store/icon-64.p
 
 ## Screenshots
 
-Ready to upload from `store/screenshots/`, in this order:
+Ready to upload from `store/screenshots/`, in this order, with these captions:
 
-1. `01-dashboard.png` — dashboard with pending subscription cards and stats.
-2. `02-unsubscribe-modal.png` — unsubscribe modal: method, source-folder checkboxes, delete/move/keep.
-3. `03-scan-progress.png` — scan in progress with live counters and Pause/Stop.
-4. `04-unsubscribed.png` — Unsubscribed tab with Cleanup/Retry/Review Again actions.
+1. `01-dashboard.png` — "Every subscription across all your accounts in one place: scan results, email counts, and one-click review."
+2. `02-unsubscribe-modal.png` — "Unsubscribe and clean up in one step: pick the method, then delete, move, or keep the sender's existing emails per folder."
+3. `03-scan-progress.png` — "Scanning every folder with live progress — pause, resume, or stop at any time without losing results."
+4. `04-unsubscribed.png` — "Track what you've unsubscribed from, retry with another method, or clean up leftover emails later."
 
 They show the real tab UI (unmodified `tab/tab.html`/`tab.css`/`tab.js`) rendered with fictional
 demo data (`.example` senders, `alex@example.net` recipient) — regenerate any time with
