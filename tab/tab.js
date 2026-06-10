@@ -1067,7 +1067,12 @@ async function doUnsubscribeConfirm() {
   // Apply dispose action on selected folders
   if (dispose === 'delete' && selectedFolders.length > 0) {
     try {
-      const result = await trace.bg('deleteEmails', { senderEmail: modalSenderEmail, recipientAddress: modalRecipientAddress, selectedFolders });
+      const result = await trace.bg('deleteEmails', {
+        senderEmail: modalSenderEmail,
+        recipientAddress: modalRecipientAddress,
+        messageGroups: sub.messageGroups,
+        selectedFolders
+      });
       if (result?.dryRun) toast(`Dry run: would delete ${result.deleted || 0} emails`, 'info');
     } catch (e) {
       await handleCleanupFailure('deleting', e);
@@ -1078,6 +1083,7 @@ async function doUnsubscribeConfirm() {
       const result = await trace.bg('moveEmails', {
         senderEmail: modalSenderEmail,
         recipientAddress: modalRecipientAddress,
+        messageGroups: sub.messageGroups,
         selectedFolders,
         destinationFolderId: destination.id,
         destination

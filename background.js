@@ -22,7 +22,7 @@ let scanState = {
 };
 
 // ── Storage helpers ──────────────────────────────────────────────────────────
-let decisionWriteQueue = Promise.resolve();
+let stateWriteQueue = Promise.resolve();
 
 function subscriptionKey(senderEmail, recipientAddress) {
   return JSON.stringify([senderEmail, recipientAddress || '']);
@@ -34,11 +34,12 @@ function tracePhase(traceId, phase, startedAt, details = {}) {
 }
 
 async function loadSubscriptions() {
-  const result = await browser.storage.local.get(['subscriptions', 'subscriptionDecisions']);
+  const result = await browser.storage.local.get(['subscriptions', 'subscriptionDecisions', 'subscriptionUpdates']);
   const decisions = result.subscriptionDecisions || {};
+  const updates = result.subscriptionUpdates || {};
   return (result.subscriptions || []).map(sub => {
-    const decision = decisions[subscriptionKey(sub.senderEmail, sub.recipientAddress)];
-    return decision ? { ...sub, ...decision } : sub;
+    const key = subscriptionKey(sub.senderEmail, sub.recipientAddress);
+    return { ...sub, ...(updates[key] || {}), ...(decisions[key] || {}) };
   });
 }
 
@@ -46,40 +47,75 @@ async function saveSubscriptions(subs) {
   await browser.storage.local.set({ subscriptions: subs });
 }
 
-async function clearSubscriptionDecisions() {
-  const write = decisionWriteQueue.then(() => browser.storage.local.remove('subscriptionDecisions'));
-  decisionWriteQueue = write.catch(() => {});
+async function clearSubscriptionState() {
+  const write = stateWriteQueue.then(() =>
+    browser.storage.local.remove(['subscriptionDecisions', 'subscriptionUpdates']));
+  stateWriteQueue = write.catch(() => {});
   await write;
 }
 
-async function loadSubscriptionsWithDecisionSnapshot() {
-  await decisionWriteQueue;
-  const result = await browser.storage.local.get(['subscriptions', 'subscriptionDecisions']);
+async function loadSubscriptionsWithStateSnapshot() {
+  await stateWriteQueue;
+  const result = await browser.storage.local.get(['subscriptions', 'subscriptionDecisions', 'subscriptionUpdates']);
   const decisions = result.subscriptionDecisions || {};
+  const updates = result.subscriptionUpdates || {};
   const subscriptions = (result.subscriptions || []).map(sub => {
-    const decision = decisions[subscriptionKey(sub.senderEmail, sub.recipientAddress)];
-    return decision ? { ...sub, ...decision } : sub;
+    const key = subscriptionKey(sub.senderEmail, sub.recipientAddress);
+    return { ...sub, ...(updates[key] || {}), ...(decisions[key] || {}) };
   });
-  return { subscriptions, decisions };
+  return { subscriptions, decisions, updates };
 }
 
-async function saveRescanSubscriptions(subs, incorporatedDecisions) {
-  const write = decisionWriteQueue.then(async () => {
-    const result = await browser.storage.local.get('subscriptionDecisions');
-    const current = result.subscriptionDecisions || {};
-    for (const [key, incorporated] of Object.entries(incorporatedDecisions)) {
-      // Preserve a decision written after the rescan snapshot.
-      if (JSON.stringify(current[key]) === JSON.stringify(incorporated)) {
-        delete current[key];
-      }
+function removeIncorporatedState(current, incorporated) {
+  for (const [key, value] of Object.entries(incorporated)) {
+    // Preserve state written after the rescan snapshot.
+    if (JSON.stringify(current[key]) === JSON.stringify(value)) {
+      delete current[key];
     }
+  }
+}
+
+async function saveRescanSubscriptions(subs, incorporatedDecisions, incorporatedUpdates) {
+  const write = stateWriteQueue.then(async () => {
+    const result = await browser.storage.local.get(['subscriptionDecisions', 'subscriptionUpdates']);
+    const currentDecisions = result.subscriptionDecisions || {};
+    const currentUpdates = result.subscriptionUpdates || {};
+    removeIncorporatedState(currentDecisions, incorporatedDecisions);
+    removeIncorporatedState(currentUpdates, incorporatedUpdates);
     await browser.storage.local.set({
       subscriptions: subs,
-      subscriptionDecisions: current
+      subscriptionDecisions: currentDecisions,
+      subscriptionUpdates: currentUpdates
     });
   });
-  decisionWriteQueue = write.catch(() => {});
+  stateWriteQueue = write.catch(() => {});
   await write;
+}
+
+async function saveSubscriptionUpdate(senderEmail, recipientAddress, update, traceId) {
+  const startedAt = Date.now();
+  const key = subscriptionKey(senderEmail, recipientAddress);
+  const write = stateWriteQueue.then(async () => {
+    const result = await browser.storage.local.get('subscriptionUpdates');
+    const updates = result.subscriptionUpdates || {};
+    updates[key] = { ...(updates[key] || {}), ...update };
+    await browser.storage.local.set({ subscriptionUpdates: updates });
+  });
+  stateWriteQueue = write.catch(() => {});
+  await write;
+  tracePhase(traceId, 'persist-subscription-update', startedAt, {
+    fields: Object.keys(update),
+    messageGroups: update.messageGroups?.length
+  });
+}
+
+async function loadCurrentMessageGroups(senderEmail, recipientAddress, fallbackGroups, traceId) {
+  const startedAt = Date.now();
+  await stateWriteQueue;
+  const result = await browser.storage.local.get('subscriptionUpdates');
+  const update = (result.subscriptionUpdates || {})[subscriptionKey(senderEmail, recipientAddress)];
+  tracePhase(traceId, 'load-subscription-update', startedAt, { hasUpdate: !!update });
+  return update?.messageGroups || fallbackGroups || [];
 }
 
 async function getLastScan() {
@@ -117,7 +153,7 @@ async function fullReset() {
   if (scanState.status === 'scanning') {
     throw new Error('Stop the active scan before running a full reset.');
   }
-  await clearSubscriptionDecisions();
+  await clearSubscriptionState();
   await browser.storage.local.remove(['subscriptions', 'lastScan']);
   scanState = {
     status: 'idle',
@@ -463,13 +499,12 @@ async function resolveCurrentMessageIds(groups, selectedFolders, traceId) {
   const selected = selectGroupsForFolders(groups, selectedFolders);
   const ids = new Set();
   const unresolvedHeaderIds = new Set();
-  let queryCount = 0;
-  let queryMs = 0;
-  let slowestQueryMs = 0;
+  let foldersQueried = 0;
+  let messagesInspected = 0;
 
   for (const g of selected) {
-    const headerIds = g.headerMessageIds || [];
-    if (headerIds.length === 0) {
+    const headerIds = new Set((g.headerMessageIds || []).map(normalizeHeaderMessageId).filter(Boolean));
+    if (headerIds.size === 0) {
       // Older data without header ids: fall back to stored numeric ids. These are
       // only valid within the same session, but it's the best we can do.
       for (const id of g.messageIds || []) {
@@ -477,33 +512,29 @@ async function resolveCurrentMessageIds(groups, selectedFolders, traceId) {
       }
       continue;
     }
-    for (const headerMessageId of headerIds) {
-      let found = [];
-      const queryStartedAt = Date.now();
-      try {
-        found = await queryByHeaderMessageId(g.folderId, headerMessageId);
-      } catch (e) {
-        console.warn('[ThunderSub] Failed to resolve message by header id', headerMessageId, e);
+
+    try {
+      const messages = await collectAllQueryResults({ folderId: g.folderId, messagesPerPage: 1000 });
+      foldersQueried++;
+      messagesInspected += messages.length;
+      for (const message of messages) {
+        const headerMessageId = normalizeHeaderMessageId(message.headerMessageId);
+        if (headerIds.has(headerMessageId)) {
+          ids.add(message.id);
+          headerIds.delete(headerMessageId);
+        }
       }
-      const duration = Date.now() - queryStartedAt;
-      queryCount++;
-      queryMs += duration;
-      slowestQueryMs = Math.max(slowestQueryMs, duration);
-      if (found.length === 0) {
-        unresolvedHeaderIds.add(headerMessageId);
-        continue;
-      }
-      for (const m of found) {
-        ids.add(m.id);
-      }
+    } catch (e) {
+      console.warn('[ThunderSub] Failed to query folder before cleanup; using stored message ids', g.folderId, e);
+      for (const id of g.messageIds || []) ids.add(id);
     }
+    for (const headerMessageId of headerIds) unresolvedHeaderIds.add(headerMessageId);
   }
 
   tracePhase(traceId, 'resolve-message-ids', startedAt, {
     groups: selected.length,
-    queries: queryCount,
-    queryMs,
-    slowestQueryMs,
+    foldersQueried,
+    messagesInspected,
     resolved: ids.size,
     unresolved: unresolvedHeaderIds.size
   });
@@ -853,8 +884,11 @@ async function runScan() {
     }))));
 
     // Merge with existing stored subscriptions (preserve decisions)
-    const { subscriptions: existing, decisions: incorporatedDecisions } =
-      await loadSubscriptionsWithDecisionSnapshot();
+    const {
+      subscriptions: existing,
+      decisions: incorporatedDecisions,
+      updates: incorporatedUpdates
+    } = await loadSubscriptionsWithStateSnapshot();
     const existingMap = {};
     for (const sub of existing) {
       const k = `${sub.senderEmail}|${sub.recipientAddress || ''}`;
@@ -909,9 +943,9 @@ async function runScan() {
       }
     }
 
-    // Remove only the decision overlays included in this merge. Decisions made
-    // after the snapshot stay overlaid on the new scan result.
-    await saveRescanSubscriptions(merged, incorporatedDecisions);
+    // Remove only state overlays included in this merge. Changes made after the
+    // snapshot stay overlaid on the new scan result.
+    await saveRescanSubscriptions(merged, incorporatedDecisions, incorporatedUpdates);
 
     const finalMessagesScanned = scanState.messagesScanned;
     const finalSendersFound = Object.keys(subs).length;
@@ -1157,16 +1191,14 @@ async function dryRunJunkEmails(senderEmail, recipientAddress) {
   return { junked: ids.length, movedToSpam: ids.length, deleted: 0, dryRun: true };
 }
 
-async function deleteEmails(senderEmail, recipientAddress, selectedFolders, traceId) {
-  let startedAt = Date.now();
-  const subs = await loadSubscriptions();
-  tracePhase(traceId, 'delete-load-subscriptions', startedAt, { subscriptions: subs.length });
-  const sub = subs.find(s => s.senderEmail === senderEmail && s.recipientAddress === recipientAddress);
-  if (!sub || !sub.messageGroups || sub.messageGroups.length === 0) {
+async function deleteEmails(senderEmail, recipientAddress, messageGroups, selectedFolders, traceId) {
+  let startedAt;
+  messageGroups = await loadCurrentMessageGroups(senderEmail, recipientAddress, messageGroups, traceId);
+  if (!messageGroups || messageGroups.length === 0) {
     return { deleted: 0 };
   }
 
-  const { ids, unresolvedHeaderIds } = await resolveCurrentMessageIds(sub.messageGroups, selectedFolders, traceId);
+  const { ids, unresolvedHeaderIds } = await resolveCurrentMessageIds(messageGroups, selectedFolders, traceId);
   if (unresolvedHeaderIds.length > 0) {
     console.warn(`[ThunderSub] ${unresolvedHeaderIds.length} message(s) could not be re-resolved before delete (moved or removed):`, unresolvedHeaderIds);
   }
@@ -1180,30 +1212,29 @@ async function deleteEmails(senderEmail, recipientAddress, selectedFolders, trac
     throw new Error(`Failed to delete ${failed} of ${ids.length} emails.`);
   }
 
-  sub.messageGroups = removeGroupsForFolders(sub.messageGroups, selectedFolders);
-  sub.emailCount = totalMessageCount(sub.messageGroups);
-  startedAt = Date.now();
-  await saveSubscriptions(subs);
-  tracePhase(traceId, 'delete-save-subscriptions', startedAt, { subscriptions: subs.length });
+  const remainingGroups = removeGroupsForFolders(messageGroups, selectedFolders);
+  await saveSubscriptionUpdate(senderEmail, recipientAddress, {
+    messageGroups: remainingGroups,
+    emailCount: totalMessageCount(remainingGroups),
+    updatedAt: new Date().toISOString()
+  }, traceId);
 
   return { deleted };
 }
 
-async function moveEmails(senderEmail, recipientAddress, selectedFolders, destinationFolderId, destinationMeta, traceId) {
-  let startedAt = Date.now();
-  const subs = await loadSubscriptions();
-  tracePhase(traceId, 'move-load-subscriptions', startedAt, { subscriptions: subs.length });
-  const sub = subs.find(s => s.senderEmail === senderEmail && s.recipientAddress === recipientAddress);
-  if (!sub || !sub.messageGroups || sub.messageGroups.length === 0) {
+async function moveEmails(senderEmail, recipientAddress, messageGroups, selectedFolders, destinationFolderId, destinationMeta, traceId) {
+  let startedAt;
+  messageGroups = await loadCurrentMessageGroups(senderEmail, recipientAddress, messageGroups, traceId);
+  if (!messageGroups || messageGroups.length === 0) {
     return { moved: 0 };
   }
 
-  const { ids, unresolvedHeaderIds } = await resolveCurrentMessageIds(sub.messageGroups, selectedFolders, traceId);
+  const { ids, unresolvedHeaderIds } = await resolveCurrentMessageIds(messageGroups, selectedFolders, traceId);
   if (unresolvedHeaderIds.length > 0) {
     console.warn(`[ThunderSub] ${unresolvedHeaderIds.length} message(s) could not be re-resolved before move (moved or removed):`, unresolvedHeaderIds);
   }
   if (ids.length === 0) return { moved: 0 };
-  const headerMessageIds = getHeaderIdsForFolders(sub.messageGroups, selectedFolders);
+  const headerMessageIds = getHeaderIdsForFolders(messageGroups, selectedFolders);
 
   const tracker = startMoveTracking(ids);
   let moved = 0;
@@ -1227,7 +1258,7 @@ async function moveEmails(senderEmail, recipientAddress, selectedFolders, destin
     throw new Error(`Failed to move ${failed} of ${ids.length} emails.`);
   }
 
-  const remainingGroups = removeGroupsForFolders(sub.messageGroups, selectedFolders);
+  const remainingGroups = removeGroupsForFolders(messageGroups, selectedFolders);
   let movedGroup = groupFromMovedHeaders(tracked.movedHeaders, destinationFolderId, destinationMeta);
 
   // Fall back to querying the destination by Message-ID for anything the
@@ -1244,11 +1275,12 @@ async function moveEmails(senderEmail, recipientAddress, selectedFolders, destin
     }
   }
 
-  sub.messageGroups = movedGroup ? [...remainingGroups, movedGroup] : remainingGroups;
-  sub.emailCount = totalMessageCount(sub.messageGroups);
-  startedAt = Date.now();
-  await saveSubscriptions(subs);
-  tracePhase(traceId, 'move-save-subscriptions', startedAt, { subscriptions: subs.length });
+  const updatedGroups = movedGroup ? [...remainingGroups, movedGroup] : remainingGroups;
+  await saveSubscriptionUpdate(senderEmail, recipientAddress, {
+    messageGroups: updatedGroups,
+    emailCount: totalMessageCount(updatedGroups),
+    updatedAt: new Date().toISOString()
+  }, traceId);
 
   const resolvedCount = movedGroup ? movedGroup.messageIds.length : 0;
   return {
@@ -1270,13 +1302,13 @@ async function setDecision(senderEmail, recipientAddress, decision, dispose, cle
     updatedAt: new Date().toISOString()
   };
 
-  const write = decisionWriteQueue.then(async () => {
+  const write = stateWriteQueue.then(async () => {
     const result = await browser.storage.local.get('subscriptionDecisions');
     const decisions = result.subscriptionDecisions || {};
     decisions[key] = update;
     await browser.storage.local.set({ subscriptionDecisions: decisions });
   });
-  decisionWriteQueue = write.catch(() => {});
+  stateWriteQueue = write.catch(() => {});
   await write;
   tracePhase(traceId, 'persist-decision', startedAt, { decision, dispose: dispose || null });
 }
@@ -1316,30 +1348,26 @@ async function dismissSubscription(senderEmail, recipientAddress) {
 
 // ── Dry-run functions for delete/move (no Thunderbird messages touched) ──────
 
-async function dryRunDeleteEmails(senderEmail, recipientAddress, selectedFolders) {
-  const subs = await loadSubscriptions();
-  const sub = subs.find(s => s.senderEmail === senderEmail && s.recipientAddress === recipientAddress);
-  if (!sub || !sub.messageGroups || sub.messageGroups.length === 0) {
+async function dryRunDeleteEmails(senderEmail, recipientAddress, messageGroups, selectedFolders) {
+  if (!messageGroups || messageGroups.length === 0) {
     return { deleted: 0, dryRun: true };
   }
 
-  const ids = getIdsForFolders(sub.messageGroups, selectedFolders);
+  const ids = getIdsForFolders(messageGroups, selectedFolders);
   const folderDesc = selectedFolders && selectedFolders.length
     ? selectedFolders.map(f => `${f.accountName} | ${f.folderName}`).join(', ')
     : 'all';
-  console.log(`[DRY RUN] Would DELETE ${ids.length} emails from ${sub.senderName || ''} <${senderEmail}> → ${recipientAddress} | folders=${folderDesc}`);
+  console.log(`[DRY RUN] Would DELETE ${ids.length} emails from ${senderEmail} → ${recipientAddress} | folders=${folderDesc}`);
 
   return { deleted: ids.length, dryRun: true };
 }
 
-async function dryRunMoveEmails(senderEmail, recipientAddress, selectedFolders, destinationFolderId, destinationMeta) {
-  const subs = await loadSubscriptions();
-  const sub = subs.find(s => s.senderEmail === senderEmail && s.recipientAddress === recipientAddress);
-  if (!sub || !sub.messageGroups || sub.messageGroups.length === 0) {
+async function dryRunMoveEmails(senderEmail, recipientAddress, messageGroups, selectedFolders, destinationFolderId, destinationMeta) {
+  if (!messageGroups || messageGroups.length === 0) {
     return { moved: 0, dryRun: true };
   }
 
-  const ids = getIdsForFolders(sub.messageGroups, selectedFolders);
+  const ids = getIdsForFolders(messageGroups, selectedFolders);
   const folderDesc = selectedFolders && selectedFolders.length
     ? selectedFolders.map(f => `${f.accountName} | ${f.folderName}`).join(', ')
     : 'all';
@@ -1488,11 +1516,11 @@ browser.runtime.onMessage.addListener((request, sender) => {
 
     case 'deleteEmails':
       return getDryRun().then(dryRun => (dryRun ? dryRunDeleteEmails : deleteEmails)(
-        request.senderEmail, request.recipientAddress, request.selectedFolders, request.traceId));
+        request.senderEmail, request.recipientAddress, request.messageGroups, request.selectedFolders, request.traceId));
 
     case 'moveEmails':
       return getDryRun().then(dryRun => (dryRun ? dryRunMoveEmails : moveEmails)(
-        request.senderEmail, request.recipientAddress, request.selectedFolders, request.destinationFolderId, request.destination, request.traceId));
+        request.senderEmail, request.recipientAddress, request.messageGroups, request.selectedFolders, request.destinationFolderId, request.destination, request.traceId));
 
     case 'getFolderTree':
       return getFolderTree();
