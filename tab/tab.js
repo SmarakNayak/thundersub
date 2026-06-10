@@ -294,7 +294,11 @@ function renderCards(subs) {
 // ── Message group helpers ─────────────────────────────────────────────────────
 
 function subHasMessages(s) {
-  return (s.messageGroups || []).some(g => (g.messageIds || []).length > 0);
+  return (s.messageGroups || []).some(g => groupMessageCount(g) > 0);
+}
+
+function groupMessageCount(group) {
+  return group.messageCount ?? (group.messageIds || []).length;
 }
 
 function groupsByAccount(messageGroups) {
@@ -302,7 +306,7 @@ function groupsByAccount(messageGroups) {
   const result = {};
   for (const g of (messageGroups || [])) {
     if (!result[g.accountName]) result[g.accountName] = {};
-    result[g.accountName][g.folderName] = (result[g.accountName][g.folderName] || 0) + g.messageIds.length;
+    result[g.accountName][g.folderName] = (result[g.accountName][g.folderName] || 0) + groupMessageCount(g);
   }
   return result;
 }
@@ -535,7 +539,7 @@ function attachCardListeners() {
 async function doJunk(senderEmail, recipientAddress) {
   const sub = subsCache.find(s => s.senderEmail === senderEmail && s.recipientAddress === recipientAddress);
   if (!sub) return;
-  const count = (sub.messageGroups || []).reduce((sum, g) => sum + g.messageIds.length, 0);
+  const count = (sub.messageGroups || []).reduce((sum, g) => sum + groupMessageCount(g), 0);
   const name = sub.senderName || senderEmail;
   if (!confirm(`Mark ${count} emails from ${name} as junk and move them to the spam folder? The sender will not be contacted.`)) return;
 
@@ -626,7 +630,7 @@ function renderModalSourceFolders(sub) {
       <label class="modal-folder-row">
         <input type="checkbox" class="modal-folder-check" data-idx="${i}" checked>
         <span class="modal-folder-name">${esc(g.accountName)} | ${esc(g.folderName)}</span>
-        <span class="modal-folder-count">${g.messageIds.length}</span>
+        <span class="modal-folder-count">${groupMessageCount(g)}</span>
       </label>`).join('');
   }
   foldersSection.style.display = groups.length > 0 ? 'block' : 'none';
@@ -924,7 +928,7 @@ function getSelectedDestination() {
 function selectedMessageCount(sub, selectedFolders) {
   const groups = sub.messageGroups || [];
   if (!selectedFolders || selectedFolders.length === 0) {
-    return groups.reduce((sum, g) => sum + g.messageIds.length, 0);
+    return groups.reduce((sum, g) => sum + groupMessageCount(g), 0);
   }
   return groups
     .filter(g => selectedFolders.some(f => (
@@ -932,7 +936,7 @@ function selectedMessageCount(sub, selectedFolders) {
         ? g.folderId === f.folderId
         : f.accountName === g.accountName && f.folderName === g.folderName
     )))
-    .reduce((sum, g) => sum + g.messageIds.length, 0);
+    .reduce((sum, g) => sum + groupMessageCount(g), 0);
 }
 
 function displayFolderPath(path, fallback) {
@@ -1132,13 +1136,6 @@ async function doUnsubscribeConfirm() {
       });
       if (result?.dryRun) {
         toast(`Dry run: would move ${result.moved || 0} emails`, 'info');
-      } else if (result) {
-        const missing = (result.moved || 0) - (result.resolvedCount || 0);
-        if (missing > 0 && missing >= (result.moved || 0)) {
-          toast('Moved emails, but could not locate them in the destination yet. Run a scan to manage them again.', 'info');
-        } else if (missing > 0) {
-          toast(`Moved ${result.moved} emails, but ${missing} could not be located in the destination yet. Run a scan to manage them again.`, 'info');
-        }
       }
     } catch (e) {
       await handleCleanupFailure('moving', e);

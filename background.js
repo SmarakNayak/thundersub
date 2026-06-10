@@ -465,7 +465,7 @@ async function collectAllFolders(account) {
 // ── Message group helpers ────────────────────────────────────────────────────
 //
 // messageGroups is an array of:
-//   { accountName, folderName, folderId, messageIds, headerMessageIds, sessionId }
+//   { accountName, folderName, folderId, messageIds, headerMessageIds, messageCount, sessionId }
 //
 // Simple (accountName, folderName) keying for delete/archive scope.
 // Unsub data lives at the top level of each subscription.
@@ -487,6 +487,7 @@ function addToMessageGroups(groups, accountName, folderName, folderId, msgId, he
   if (headerMessageId && !group.headerMessageIds.includes(headerMessageId)) {
     group.headerMessageIds.push(headerMessageId);
   }
+  group.messageCount = group.headerMessageIds.length || group.messageIds.length;
 }
 
 function folderMatchesSelection(group, selectedFolder) {
@@ -600,7 +601,7 @@ function removeGroupsForFolders(groups, selectedFolders) {
 }
 
 function totalMessageCount(groups) {
-  return groups.reduce((sum, g) => sum + g.messageIds.length, 0);
+  return groups.reduce((sum, g) => sum + (g.messageCount ?? (g.messageIds || []).length), 0);
 }
 
 async function collectAllQueryResults(queryInfo) {
@@ -660,74 +661,25 @@ function startMoveTracking(originalIds) {
   };
 }
 
-function groupFromMovedHeaders(headers, destinationFolderId, destinationMeta) {
-  if (!headers.length) return null;
-  const group = {
-    accountName: destinationMeta?.accountName || '',
-    folderName: destinationMeta?.folderName || destinationMeta?.folderPath || 'Moved',
-    folderId: destinationFolderId,
-    messageIds: [],
-    headerMessageIds: [],
-    sessionId: SESSION_ID
-  };
-  for (const m of headers) {
-    if (!group.messageIds.includes(m.id)) group.messageIds.push(m.id);
-    const headerMessageId = normalizeHeaderMessageId(m.headerMessageId);
-    if (headerMessageId && !group.headerMessageIds.includes(headerMessageId)) {
-      group.headerMessageIds.push(headerMessageId);
-    }
+function buildDeferredMovedGroup(headerMessageIds, movedHeaders, destinationFolderId, destinationMeta) {
+  const trackedByHeaderId = new Map();
+  for (const message of movedHeaders) {
+    const headerMessageId = normalizeHeaderMessageId(message.headerMessageId);
+    if (headerMessageId) trackedByHeaderId.set(headerMessageId, message.id);
   }
-  return group;
-}
-
-function mergeMovedGroups(a, b) {
-  if (!a) return b;
-  if (!b) return a;
-  for (const id of b.messageIds) {
-    if (!a.messageIds.includes(id)) a.messageIds.push(id);
-  }
-  for (const headerMessageId of b.headerMessageIds) {
-    if (!a.headerMessageIds.includes(headerMessageId)) a.headerMessageIds.push(headerMessageId);
-  }
-  return a;
-}
-
-async function buildMovedMessageGroup(headerMessageIds, destinationFolderId, destinationMeta) {
-  if (!headerMessageIds.length) return null;
-
-  const messageIds = [];
-  const foundHeaderIds = [];
-  const unresolved = new Set(headerMessageIds);
-  for (const delayMs of [0, 250, 750, 1500, 2500]) {
-    if (delayMs > 0) await new Promise(resolve => setTimeout(resolve, delayMs));
-
-    for (const headerMessageId of [...unresolved]) {
-      let found = [];
-      try {
-        found = await queryByHeaderMessageId(destinationFolderId, headerMessageId);
-      } catch (e) {
-        console.warn('Failed to resolve moved message:', e);
-      }
-      for (const m of found) {
-        if (!messageIds.includes(m.id)) messageIds.push(m.id);
-      }
-      if (found.length > 0) {
-        foundHeaderIds.push(headerMessageId);
-        unresolved.delete(headerMessageId);
-      }
-    }
-
-    if (unresolved.size === 0) break;
-  }
-
-  if (!messageIds.length) return null;
+  const permanentIds = [...new Set([
+    ...headerMessageIds,
+    ...movedHeaders.map(message => message.headerMessageId)
+  ].map(normalizeHeaderMessageId).filter(Boolean))];
+  const allTracked = permanentIds.length > 0 && permanentIds.every(id => trackedByHeaderId.has(id));
   return {
     accountName: destinationMeta?.accountName || '',
     folderName: destinationMeta?.folderName || destinationMeta?.folderPath || 'Moved',
     folderId: destinationFolderId,
-    messageIds,
-    headerMessageIds: foundHeaderIds,
-    sessionId: SESSION_ID
+    messageIds: permanentIds.flatMap(id => trackedByHeaderId.has(id) ? [trackedByHeaderId.get(id)] : []),
+    headerMessageIds: permanentIds,
+    messageCount: permanentIds.length,
+    sessionId: allTracked ? SESSION_ID : null
   };
 }
 
@@ -1282,7 +1234,7 @@ async function moveEmails(senderEmail, recipientAddress, messageGroups, selected
     tracePhase(traceId, 'move-messages-api', startedAt, { requested: ids.length, moved, failed });
   } finally {
     // Use events delivered while messages.move() was in flight. Some backends
-    // never emit onMoved, so do not add a fixed grace wait before fallback.
+    // never emit onMoved, so permanent ids remain the authoritative reference.
     startedAt = Date.now();
     tracked = await tracker.finish(0);
     tracePhase(traceId, 'move-event-wait', startedAt, {
@@ -1296,36 +1248,22 @@ async function moveEmails(senderEmail, recipientAddress, messageGroups, selected
   }
 
   const remainingGroups = removeGroupsForFolders(messageGroups, selectedFolders);
-  let movedGroup = groupFromMovedHeaders(tracked.movedHeaders, destinationFolderId, destinationMeta);
-
-  // Fall back to querying the destination by Message-ID for anything the
-  // onMoved event did not report (backends that skip the event, or legacy
-  // data without stored header ids).
-  if (tracked.unresolvedCount > 0) {
-    const foundHeaderIds = new Set(movedGroup ? movedGroup.headerMessageIds : []);
-    const missingHeaderIds = headerMessageIds.filter(h => !foundHeaderIds.has(h));
-    if (missingHeaderIds.length > 0) {
-      startedAt = Date.now();
-      const fallbackGroup = await buildMovedMessageGroup(missingHeaderIds, destinationFolderId, destinationMeta);
-      tracePhase(traceId, 'move-fallback-resolution', startedAt, { missing: missingHeaderIds.length });
-      movedGroup = mergeMovedGroups(movedGroup, fallbackGroup);
-    }
-  }
+  const movedGroup = buildDeferredMovedGroup(
+    headerMessageIds,
+    tracked.movedHeaders,
+    destinationFolderId,
+    destinationMeta
+  );
 
   reportCleanupProgress(traceId, 'saving', 0, 1, 'Saving cleanup state...');
-  const updatedGroups = movedGroup ? [...remainingGroups, movedGroup] : remainingGroups;
+  const updatedGroups = [...remainingGroups, movedGroup];
   await saveSubscriptionUpdate(senderEmail, recipientAddress, {
     messageGroups: updatedGroups,
     emailCount: totalMessageCount(updatedGroups),
     updatedAt: new Date().toISOString()
   }, traceId);
 
-  const resolvedCount = movedGroup ? movedGroup.messageIds.length : 0;
-  return {
-    moved,
-    resolved: resolvedCount >= moved,
-    resolvedCount
-  };
+  return { moved };
 }
 
 // ── Other actions ────────────────────────────────────────────────────────────
@@ -1470,7 +1408,10 @@ async function viewSubscription(senderEmail, recipientAddress) {
   // Find the folder with the most messages
   let bestGroup = sub.messageGroups[0];
   for (const g of sub.messageGroups) {
-    if (g.messageIds.length > bestGroup.messageIds.length) bestGroup = g;
+    if ((g.messageCount ?? (g.messageIds || []).length) >
+        (bestGroup.messageCount ?? (bestGroup.messageIds || []).length)) {
+      bestGroup = g;
+    }
   }
 
   let folderId = bestGroup.folderId || null;
