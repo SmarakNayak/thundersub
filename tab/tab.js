@@ -346,6 +346,7 @@ function buildActions(s) {
     return `
     <button class="btn btn-view js-view" ${attrs}>View</button>
     <button class="btn btn-outline js-cleanup" ${attrs}>Cleanup</button>
+    <button class="btn btn-unsub js-retry" ${attrs}>Retry</button>
     <button class="btn btn-keep js-reset-pending" title="Move this subscription back to Pending for review." ${attrs}>Review Again</button>`;
   }
 
@@ -388,7 +389,7 @@ function buildCard(s) {
   return `
 <div class="card" id="${cardId}" data-sender-email="${esc(s.senderEmail)}" data-recipient-address="${esc(s.recipientAddress || '')}">
   <div class="card-body">
-    ${dismissable ? `<button class="card-dismiss js-dismiss" title="Dismiss this subscription" aria-label="Dismiss this subscription" ${attrs}>&#128465;</button>` : ''}
+    ${dismissable ? `<button class="card-dismiss js-dismiss" title="Dismiss and stop tracking this subscription" aria-label="Dismiss and stop tracking this subscription" ${attrs}>&#128465;</button>` : ''}
     <div class="card-top">
       <div class="avatar" style="background:${color}">${esc(ini)}</div>
       <div class="card-info">
