@@ -1005,6 +1005,10 @@ async function doUnsubscribeConfirm() {
       toast('Select an available destination folder', 'info');
       return;
     }
+    if (selectedFolders.some(folder => folder.folderId === destination.id)) {
+      toast('Select a destination different from the source folder', 'info');
+      return;
+    }
   }
 
   const confirmBtn = document.getElementById('modal-confirm');
