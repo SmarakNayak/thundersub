@@ -45,6 +45,33 @@ function bg(command, data) {
   return browser.runtime.sendMessage({ command, ...data });
 }
 
+function createTrace(label, details = {}) {
+  const id = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`;
+  const startedAt = performance.now();
+  const log = (phase, phaseStartedAt = startedAt, extra = {}) => {
+    console.log(`[ThunderSub trace ${id}] ${phase} +${Math.round(performance.now() - phaseStartedAt)}ms`, {
+      elapsedMs: Math.round(performance.now() - startedAt),
+      ...extra
+    });
+  };
+  log(`${label}:start`, startedAt, details);
+  return {
+    id,
+    log,
+    async bg(command, data = {}) {
+      const phaseStartedAt = performance.now();
+      try {
+        const result = await bg(command, { ...data, traceId: id });
+        log(`ui:${command}`, phaseStartedAt);
+        return result;
+      } catch (error) {
+        log(`ui:${command}:failed`, phaseStartedAt, { error: String(error?.message || error) });
+        throw error;
+      }
+    }
+  };
+}
+
 function avatarColor(email) {
   let h = 0;
   for (let i = 0; i < email.length; i++) h = (h * 31 + email.charCodeAt(i)) & 0xffffff;
@@ -917,6 +944,13 @@ async function doUnsubscribeConfirm() {
   const selectedFolders = getSelectedFolders();
   const method = modalSelectedMethod || getBestMethod(sub);
   const destination = dispose === 'move' ? getSelectedDestination() : null;
+  const trace = createTrace('unsubscribe', {
+    mode: modalMode,
+    method: method?.type || 'none',
+    dispose,
+    selectedFolders: selectedFolders.length,
+    selectedMessages: selectedMessageCount(sub, selectedFolders)
+  });
 
   // Validate the move destination before anything fires — especially the
   // unsubscribe request, which cannot be taken back.
@@ -936,7 +970,7 @@ async function doUnsubscribeConfirm() {
   confirmBtn.textContent = 'Checking...';
 
   try {
-    const result = await bg('getDryRun');
+    const result = await trace.bg('getDryRun');
     dryRun = result.dryRun === true;
     document.getElementById('dry-run-toggle').checked = dryRun;
   } catch (e) {
@@ -949,6 +983,7 @@ async function doUnsubscribeConfirm() {
     confirmBtn.disabled = false;
     confirmBtn.textContent = modalConfirmLabel();
     closeUnsubModal();
+    trace.log('unsubscribe:dry-run-complete');
     return;
   }
 
@@ -963,17 +998,17 @@ async function doUnsubscribeConfirm() {
   } else if (method) {
     try {
       if (method.type === 'oneclick') {
-        const r = await bg('unsubOneClick', { url: method.url });
+        const r = await trace.bg('unsubOneClick', { url: method.url });
         unsubscribeResult = r;
         ok = r.ok;
       } else if (method.type === 'mail') {
-        unsubscribeResult = await bg('unsubMail', { url: method.url, senderEmail: modalSenderEmail });
+        unsubscribeResult = await trace.bg('unsubMail', { url: method.url, senderEmail: modalSenderEmail });
         ok = true;
       } else if (method.type === 'embedded') {
-        unsubscribeResult = await bg('unsubEmbedded', { url: method.url });
+        unsubscribeResult = await trace.bg('unsubEmbedded', { url: method.url });
         ok = true;
       } else {
-        unsubscribeResult = await bg('unsubWeb', { url: method.url });
+        unsubscribeResult = await trace.bg('unsubWeb', { url: method.url });
         ok = true;
       }
     } catch (e) {
@@ -983,7 +1018,7 @@ async function doUnsubscribeConfirm() {
 
   if (!ok) {
     const message = method ? 'Unsubscribe request failed' : 'No unsubscribe method is available';
-    await bg('decide', {
+    await trace.bg('decide', {
       senderEmail: modalSenderEmail,
       recipientAddress: modalRecipientAddress,
       decision: 'error',
@@ -997,6 +1032,7 @@ async function doUnsubscribeConfirm() {
     confirmBtn.textContent = modalConfirmLabel();
     closeUnsubModal();
     showErrorsView();
+    trace.log('unsubscribe:failed', undefined, { stage: 'unsubscribe' });
     return;
   }
 
@@ -1008,7 +1044,7 @@ async function doUnsubscribeConfirm() {
   // unsubscribe already succeeded. Keep the unsubscribe outcome, leave the
   // emails in place (dispose: null), and let the Cleanup button retry.
   async function handleCleanupFailure(stage, e) {
-    await bg('decide', {
+    await trace.bg('decide', {
       senderEmail: modalSenderEmail,
       recipientAddress: modalRecipientAddress,
       decision: outcomeDecision,
@@ -1025,12 +1061,13 @@ async function doUnsubscribeConfirm() {
     confirmBtn.textContent = modalConfirmLabel();
     closeUnsubModal();
     loadSubs(currentFilter);
+    trace.log('unsubscribe:cleanup-failed', undefined, { stage });
   }
 
   // Apply dispose action on selected folders
   if (dispose === 'delete' && selectedFolders.length > 0) {
     try {
-      const result = await bg('deleteEmails', { senderEmail: modalSenderEmail, recipientAddress: modalRecipientAddress, selectedFolders });
+      const result = await trace.bg('deleteEmails', { senderEmail: modalSenderEmail, recipientAddress: modalRecipientAddress, selectedFolders });
       if (result?.dryRun) toast(`Dry run: would delete ${result.deleted || 0} emails`, 'info');
     } catch (e) {
       await handleCleanupFailure('deleting', e);
@@ -1038,7 +1075,7 @@ async function doUnsubscribeConfirm() {
     }
   } else if (dispose === 'move' && selectedFolders.length > 0) {
     try {
-      const result = await bg('moveEmails', {
+      const result = await trace.bg('moveEmails', {
         senderEmail: modalSenderEmail,
         recipientAddress: modalRecipientAddress,
         selectedFolders,
@@ -1063,7 +1100,7 @@ async function doUnsubscribeConfirm() {
 
   // Finalize decision (cleanup succeeded or nothing to dispose).
   try {
-    await bg('decide', {
+    await trace.bg('decide', {
       senderEmail: modalSenderEmail,
       recipientAddress: modalRecipientAddress,
       decision: outcomeDecision,
@@ -1075,6 +1112,7 @@ async function doUnsubscribeConfirm() {
     toast('Error: ' + (e.message || e), 'error');
     confirmBtn.disabled = false;
     confirmBtn.textContent = modalConfirmLabel();
+    trace.log('unsubscribe:failed', undefined, { stage: 'persist-decision' });
     return;
   }
   updateDecisionStats(sub.decision, outcomeDecision);
@@ -1107,6 +1145,7 @@ async function doUnsubscribeConfirm() {
   }
 
   closeUnsubModal();
+  trace.log('unsubscribe:complete');
 }
 
 // ── Keep action ──────────────────────────────────────────────────────────────

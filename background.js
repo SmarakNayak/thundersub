@@ -28,6 +28,11 @@ function subscriptionKey(senderEmail, recipientAddress) {
   return JSON.stringify([senderEmail, recipientAddress || '']);
 }
 
+function tracePhase(traceId, phase, startedAt, details = {}) {
+  if (!traceId) return;
+  console.log(`[ThunderSub trace ${traceId}] bg:${phase} +${Date.now() - startedAt}ms`, details);
+}
+
 async function loadSubscriptions() {
   const result = await browser.storage.local.get(['subscriptions', 'subscriptionDecisions']);
   const decisions = result.subscriptionDecisions || {};
@@ -423,10 +428,14 @@ function getIdsForFolders(groups, selectedFolders) {
 // See: https://webextension-api.thunderbird.net/en/latest/messages.html#messages-messageid
 // So before deleting/moving we re-resolve the *current* numeric ids from the
 // stable RFC 5322 Message-ID header (headerMessageIds) within each group's folder.
-async function resolveCurrentMessageIds(groups, selectedFolders) {
+async function resolveCurrentMessageIds(groups, selectedFolders, traceId) {
+  const startedAt = Date.now();
   const selected = selectGroupsForFolders(groups, selectedFolders);
   const ids = new Set();
   const unresolvedHeaderIds = new Set();
+  let queryCount = 0;
+  let queryMs = 0;
+  let slowestQueryMs = 0;
 
   for (const g of selected) {
     const headerIds = g.headerMessageIds || [];
@@ -440,11 +449,16 @@ async function resolveCurrentMessageIds(groups, selectedFolders) {
     }
     for (const headerMessageId of headerIds) {
       let found = [];
+      const queryStartedAt = Date.now();
       try {
         found = await queryByHeaderMessageId(g.folderId, headerMessageId);
       } catch (e) {
         console.warn('[ThunderSub] Failed to resolve message by header id', headerMessageId, e);
       }
+      const duration = Date.now() - queryStartedAt;
+      queryCount++;
+      queryMs += duration;
+      slowestQueryMs = Math.max(slowestQueryMs, duration);
       if (found.length === 0) {
         unresolvedHeaderIds.add(headerMessageId);
         continue;
@@ -455,6 +469,14 @@ async function resolveCurrentMessageIds(groups, selectedFolders) {
     }
   }
 
+  tracePhase(traceId, 'resolve-message-ids', startedAt, {
+    groups: selected.length,
+    queries: queryCount,
+    queryMs,
+    slowestQueryMs,
+    resolved: ids.size,
+    unresolved: unresolvedHeaderIds.size
+  });
   return { ids: [...ids], unresolvedHeaderIds: [...unresolvedHeaderIds] };
 }
 
@@ -892,16 +914,19 @@ async function runScan() {
 
 // ── Unsubscribe methods ──────────────────────────────────────────────────────
 
-async function unsubOneClick(url) {
+async function unsubOneClick(url, traceId) {
+  const startedAt = Date.now();
   const resp = await fetch(url, {
     method: 'POST',
     headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
     body: 'List-Unsubscribe=One-Click'
   });
+  tracePhase(traceId, 'one-click-fetch', startedAt, { status: resp.status, ok: resp.ok });
   return { ok: resp.ok, status: resp.status };
 }
 
-async function unsubMail(mailtoUrl) {
+async function unsubMail(mailtoUrl, traceId) {
+  const startedAt = Date.now();
   const parsed = new URL(mailtoUrl);
   const to = parsed.pathname;
   const subject = parsed.searchParams.get('subject') || 'unsubscribe';
@@ -925,6 +950,7 @@ async function unsubMail(mailtoUrl) {
   const composeTab = await browser.compose.beginNew(details);
   const autoSend = await getAutoSendUnsubscribeEmails();
   if (!autoSend) {
+    tracePhase(traceId, 'mailto-compose-draft', startedAt);
     return { ok: true, to, drafted: true };
   }
 
@@ -933,16 +959,21 @@ async function unsubMail(mailtoUrl) {
   if (!result || typeof result.headerMessageId === 'undefined') {
     throw new Error('Failed to send unsubscribe email');
   }
+  tracePhase(traceId, 'mailto-compose-send', startedAt);
   return { ok: true, to, sent: true };
 }
 
-async function unsubWeb(url) {
+async function unsubWeb(url, traceId) {
+  const startedAt = Date.now();
   await browser.windows.openDefaultBrowser(url);
+  tracePhase(traceId, 'open-browser', startedAt);
   return { ok: true };
 }
 
-async function unsubEmbedded(url) {
+async function unsubEmbedded(url, traceId) {
+  const startedAt = Date.now();
   await browser.windows.openDefaultBrowser(url);
+  tracePhase(traceId, 'open-embedded-browser', startedAt);
   return { ok: true };
 }
 
@@ -1096,20 +1127,24 @@ async function dryRunJunkEmails(senderEmail, recipientAddress) {
   return { junked: ids.length, movedToSpam: ids.length, deleted: 0, dryRun: true };
 }
 
-async function deleteEmails(senderEmail, recipientAddress, selectedFolders) {
+async function deleteEmails(senderEmail, recipientAddress, selectedFolders, traceId) {
+  let startedAt = Date.now();
   const subs = await loadSubscriptions();
+  tracePhase(traceId, 'delete-load-subscriptions', startedAt, { subscriptions: subs.length });
   const sub = subs.find(s => s.senderEmail === senderEmail && s.recipientAddress === recipientAddress);
   if (!sub || !sub.messageGroups || sub.messageGroups.length === 0) {
     return { deleted: 0 };
   }
 
-  const { ids, unresolvedHeaderIds } = await resolveCurrentMessageIds(sub.messageGroups, selectedFolders);
+  const { ids, unresolvedHeaderIds } = await resolveCurrentMessageIds(sub.messageGroups, selectedFolders, traceId);
   if (unresolvedHeaderIds.length > 0) {
     console.warn(`[ThunderSub] ${unresolvedHeaderIds.length} message(s) could not be re-resolved before delete (moved or removed):`, unresolvedHeaderIds);
   }
   if (ids.length === 0) return { deleted: 0 };
 
+  startedAt = Date.now();
   const { deleted, failed } = await deleteMessagesInBatches(ids);
+  tracePhase(traceId, 'delete-messages-api', startedAt, { requested: ids.length, deleted, failed });
 
   if (failed > 0) {
     throw new Error(`Failed to delete ${failed} of ${ids.length} emails.`);
@@ -1117,19 +1152,23 @@ async function deleteEmails(senderEmail, recipientAddress, selectedFolders) {
 
   sub.messageGroups = removeGroupsForFolders(sub.messageGroups, selectedFolders);
   sub.emailCount = totalMessageCount(sub.messageGroups);
+  startedAt = Date.now();
   await saveSubscriptions(subs);
+  tracePhase(traceId, 'delete-save-subscriptions', startedAt, { subscriptions: subs.length });
 
   return { deleted };
 }
 
-async function moveEmails(senderEmail, recipientAddress, selectedFolders, destinationFolderId, destinationMeta) {
+async function moveEmails(senderEmail, recipientAddress, selectedFolders, destinationFolderId, destinationMeta, traceId) {
+  let startedAt = Date.now();
   const subs = await loadSubscriptions();
+  tracePhase(traceId, 'move-load-subscriptions', startedAt, { subscriptions: subs.length });
   const sub = subs.find(s => s.senderEmail === senderEmail && s.recipientAddress === recipientAddress);
   if (!sub || !sub.messageGroups || sub.messageGroups.length === 0) {
     return { moved: 0 };
   }
 
-  const { ids, unresolvedHeaderIds } = await resolveCurrentMessageIds(sub.messageGroups, selectedFolders);
+  const { ids, unresolvedHeaderIds } = await resolveCurrentMessageIds(sub.messageGroups, selectedFolders, traceId);
   if (unresolvedHeaderIds.length > 0) {
     console.warn(`[ThunderSub] ${unresolvedHeaderIds.length} message(s) could not be re-resolved before move (moved or removed):`, unresolvedHeaderIds);
   }
@@ -1141,10 +1180,17 @@ async function moveEmails(senderEmail, recipientAddress, selectedFolders, destin
   let failed = 0;
   let tracked;
   try {
+    startedAt = Date.now();
     ({ moved, failed } = await moveMessagesInBatches(ids, destinationFolderId));
+    tracePhase(traceId, 'move-messages-api', startedAt, { requested: ids.length, moved, failed });
   } finally {
     // Give late onMoved events a moment to arrive, then stop listening.
+    startedAt = Date.now();
     tracked = await tracker.finish(failed === 0 ? 2000 : 0);
+    tracePhase(traceId, 'move-event-wait', startedAt, {
+      movedEvents: tracked.movedHeaders.length,
+      unresolved: tracked.unresolvedCount
+    });
   }
 
   if (failed > 0) {
@@ -1161,14 +1207,18 @@ async function moveEmails(senderEmail, recipientAddress, selectedFolders, destin
     const foundHeaderIds = new Set(movedGroup ? movedGroup.headerMessageIds : []);
     const missingHeaderIds = headerMessageIds.filter(h => !foundHeaderIds.has(h));
     if (missingHeaderIds.length > 0) {
+      startedAt = Date.now();
       const fallbackGroup = await buildMovedMessageGroup(missingHeaderIds, destinationFolderId, destinationMeta);
+      tracePhase(traceId, 'move-fallback-resolution', startedAt, { missing: missingHeaderIds.length });
       movedGroup = mergeMovedGroups(movedGroup, fallbackGroup);
     }
   }
 
   sub.messageGroups = movedGroup ? [...remainingGroups, movedGroup] : remainingGroups;
   sub.emailCount = totalMessageCount(sub.messageGroups);
+  startedAt = Date.now();
   await saveSubscriptions(subs);
+  tracePhase(traceId, 'move-save-subscriptions', startedAt, { subscriptions: subs.length });
 
   const resolvedCount = movedGroup ? movedGroup.messageIds.length : 0;
   return {
@@ -1179,7 +1229,8 @@ async function moveEmails(senderEmail, recipientAddress, selectedFolders, destin
 }
 
 // ── Other actions ────────────────────────────────────────────────────────────
-async function setDecision(senderEmail, recipientAddress, decision, dispose, cleanupDestination, error) {
+async function setDecision(senderEmail, recipientAddress, decision, dispose, cleanupDestination, error, traceId) {
+  const startedAt = Date.now();
   const key = subscriptionKey(senderEmail, recipientAddress);
   const update = {
     decision,
@@ -1197,6 +1248,7 @@ async function setDecision(senderEmail, recipientAddress, decision, dispose, cle
   });
   decisionWriteQueue = write.catch(() => {});
   await write;
+  tracePhase(traceId, 'persist-decision', startedAt, { decision, dispose: dispose || null });
 }
 
 async function getStats() {
@@ -1393,7 +1445,7 @@ browser.runtime.onMessage.addListener((request, sender) => {
       return fullReset();
 
     case 'decide':
-      return setDecision(request.senderEmail, request.recipientAddress, request.decision, request.dispose, request.cleanupDestination, request.error)
+      return setDecision(request.senderEmail, request.recipientAddress, request.decision, request.dispose, request.cleanupDestination, request.error, request.traceId)
         .then(() => ({ ok: true }));
 
     case 'dismiss':
@@ -1406,11 +1458,11 @@ browser.runtime.onMessage.addListener((request, sender) => {
 
     case 'deleteEmails':
       return getDryRun().then(dryRun => (dryRun ? dryRunDeleteEmails : deleteEmails)(
-        request.senderEmail, request.recipientAddress, request.selectedFolders));
+        request.senderEmail, request.recipientAddress, request.selectedFolders, request.traceId));
 
     case 'moveEmails':
       return getDryRun().then(dryRun => (dryRun ? dryRunMoveEmails : moveEmails)(
-        request.senderEmail, request.recipientAddress, request.selectedFolders, request.destinationFolderId, request.destination));
+        request.senderEmail, request.recipientAddress, request.selectedFolders, request.destinationFolderId, request.destination, request.traceId));
 
     case 'getFolderTree':
       return getFolderTree();
@@ -1424,22 +1476,22 @@ browser.runtime.onMessage.addListener((request, sender) => {
     case 'unsubOneClick':
       return getDryRun().then(dryRun => dryRun
         ? dryRunUnsubscribe('one-click', request.url)
-        : unsubOneClick(request.url));
+        : unsubOneClick(request.url, request.traceId));
 
     case 'unsubMail':
       return getDryRun().then(dryRun => dryRun
         ? dryRunUnsubscribe('email', request.url)
-        : unsubMail(request.url));
+        : unsubMail(request.url, request.traceId));
 
     case 'unsubWeb':
       return getDryRun().then(dryRun => dryRun
         ? dryRunUnsubscribe('browser', request.url)
-        : unsubWeb(request.url));
+        : unsubWeb(request.url, request.traceId));
 
     case 'unsubEmbedded':
       return getDryRun().then(dryRun => dryRun
         ? dryRunUnsubscribe('embedded link', request.url)
-        : unsubEmbedded(request.url));
+        : unsubEmbedded(request.url, request.traceId));
 
     case 'openTab':
       return browser.tabs.create({ url: '/tab/tab.html' }).then(() => ({ ok: true }));
