@@ -613,14 +613,22 @@ let modalSelectedMethod = null;
 let cleanupDefaultAction = null;
 let modalOperationTraceId = null;
 let modalCancelRequested = false;
+let modalProgressMessage = 'Working...';
+
+function renderModalProgressText() {
+  document.getElementById('modal-progress-text').textContent = modalCancelRequested
+    ? `${modalProgressMessage} (cancelling after this action)`
+    : modalProgressMessage;
+}
 
 function resetModalProgress() {
   modalOperationTraceId = null;
   modalCancelRequested = false;
+  modalProgressMessage = 'Working...';
   const progress = document.getElementById('modal-progress');
   progress.classList.remove('active');
   document.getElementById('modal-progress-bar').style.width = '0';
-  document.getElementById('modal-progress-text').textContent = 'Working...';
+  renderModalProgressText();
   const cancelBtn = document.getElementById('modal-cancel');
   cancelBtn.disabled = false;
   cancelBtn.textContent = 'Cancel';
@@ -629,9 +637,8 @@ function resetModalProgress() {
 function showModalProgress(traceId, message, percent) {
   modalOperationTraceId = traceId;
   document.getElementById('modal-progress').classList.add('active');
-  if (!modalCancelRequested) {
-    document.getElementById('modal-progress-text').textContent = message;
-  }
+  modalProgressMessage = message;
+  renderModalProgressText();
   document.getElementById('modal-progress-bar').style.width = `${Math.max(0, Math.min(100, percent))}%`;
 }
 
@@ -646,7 +653,7 @@ async function cancelOrCloseUnsubModal() {
   const cancelBtn = document.getElementById('modal-cancel');
   cancelBtn.disabled = true;
   cancelBtn.textContent = 'Cancelling...';
-  document.getElementById('modal-progress-text').textContent = 'Cancelling after the current action...';
+  renderModalProgressText();
   try {
     await bg('cancelOperation', { traceId: modalOperationTraceId });
   } catch (e) {
@@ -654,6 +661,7 @@ async function cancelOrCloseUnsubModal() {
     modalCancelRequested = false;
     cancelBtn.disabled = false;
     cancelBtn.textContent = 'Cancel';
+    renderModalProgressText();
   }
 }
 
