@@ -247,6 +247,10 @@ function renderCards(subs) {
 
 // ── Message group helpers ─────────────────────────────────────────────────────
 
+function subHasMessages(s) {
+  return (s.messageGroups || []).some(g => (g.messageIds || []).length > 0);
+}
+
 function groupsByAccount(messageGroups) {
   // Returns: { accountName: { folderName: count, ... }, ... }
   const result = {};
@@ -346,18 +350,12 @@ function buildActions(s) {
     <button class="btn btn-keep js-unkeep" title="Move this subscription back to Pending for review." ${attrs}>Review Again</button>`;
   }
 
-  if (s.decision === 'unsubscribed') {
-    return `
+  if (s.decision === 'unsubscribed' || s.decision === 'error') {
+    // View and Cleanup act on stored messages; with none left they can only fail.
+    const messageButtons = subHasMessages(s) ? `
     <button class="btn btn-view js-view" ${attrs}>View</button>
-    <button class="btn btn-outline js-cleanup" ${attrs}>Cleanup</button>
-    <button class="btn btn-unsub js-retry" ${attrs}>Retry</button>
-    <button class="btn btn-keep js-reset-pending" title="Move this subscription back to Pending for review." ${attrs}>Review Again</button>`;
-  }
-
-  if (s.decision === 'error') {
-    return `
-    <button class="btn btn-view js-view" ${attrs}>View</button>
-    <button class="btn btn-outline js-cleanup" ${attrs}>Cleanup</button>
+    <button class="btn btn-outline js-cleanup" ${attrs}>Cleanup</button>` : '';
+    return `${messageButtons}
     <button class="btn btn-unsub js-retry" ${attrs}>Retry</button>
     <button class="btn btn-keep js-reset-pending" title="Move this subscription back to Pending for review." ${attrs}>Review Again</button>`;
   }
@@ -676,14 +674,18 @@ async function onDisposeChange() {
         return;
       }
     }
-    // Filter tree to only accounts relevant to this subscription
-    const sub = subsCache.find(s => s.senderEmail === modalSenderEmail && s.recipientAddress === modalRecipientAddress);
-    const relevantAccounts = new Set((sub?.messageGroups || []).map(g => g.accountName));
-    const filtered = folderTreeCache.filter(a => relevantAccounts.has(a.accountName));
-    renderFolderTree(filtered);
+    renderRelevantFolderTree();
   } else {
     destWrap.style.display = 'none';
   }
+}
+
+// Render the destination tree showing only accounts this subscription has
+// messages in — a move can't target an unrelated mailbox.
+function renderRelevantFolderTree() {
+  const sub = subsCache.find(s => s.senderEmail === modalSenderEmail && s.recipientAddress === modalRecipientAddress);
+  const relevantAccounts = new Set((sub?.messageGroups || []).map(g => g.accountName));
+  renderFolderTree((folderTreeCache || []).filter(a => relevantAccounts.has(a.accountName)));
 }
 
 function renderFolderTree(tree) {
@@ -749,7 +751,7 @@ async function createNewFolder() {
     document.getElementById('modal-new-folder-form').style.display = 'none';
     // Refresh tree and auto-select new folder
     folderTreeCache = await bg('getFolderTree');
-    renderFolderTree(folderTreeCache);
+    renderRelevantFolderTree();
     // Select the new folder
     const newRadio = document.querySelector(`input[name="dest-folder"][value="${CSS.escape(result.id)}"]`);
     if (newRadio) newRadio.checked = true;
