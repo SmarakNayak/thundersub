@@ -913,37 +913,102 @@ async function deleteMessagesInBatches(ids) {
   return { deleted, failed };
 }
 
-// Silent handling for phishing/spam senders: flag every message as junk and
-// delete to Trash. The sender is never contacted, so the address is never
-// confirmed active. The subscription is dismissed; deleted messages leave
-// the scanned folders, so the sender only resurfaces if new mail arrives.
+async function moveMessagesInBatches(ids, destinationFolderId) {
+  let moved = 0;
+  let failed = 0;
+  const batchSize = 50;
+  for (let i = 0; i < ids.length; i += batchSize) {
+    const batch = ids.slice(i, i + batchSize);
+    try {
+      await browser.messages.move(batch, destinationFolderId);
+      moved += batch.length;
+    } catch (e) {
+      failed += batch.length;
+      console.warn('Failed to move batch:', e);
+    }
+  }
+  return { moved, failed };
+}
+
+async function findJunkFolderId(account) {
+  let junkFolderId = null;
+  async function walk(folders) {
+    for (const folder of folders) {
+      if (folder.type === 'junk') {
+        junkFolderId = folder.id;
+        return true;
+      }
+      try {
+        const subFolders = await browser.folders.getSubFolders(folder.id, false);
+        if (subFolders && subFolders.length > 0 && await walk(subFolders)) return true;
+      } catch (e) { /* Some folders may not support subfolders */ }
+    }
+    return false;
+  }
+  if (account.folders && account.folders.length > 0) {
+    await walk(account.folders);
+  }
+  return junkFolderId;
+}
+
+// Silent handling for phishing/spam senders: flag every message as junk
+// (Thunderbird's local filter) and move it to the account's junk/spam folder
+// — for Gmail/Outlook IMAP that is the documented "report as spam" signal,
+// training the server-side filter. The sender is never contacted, so the
+// address is never confirmed active. No delete: spam folders auto-purge, and
+// removing the message right after the move could undercut the report.
+// Accounts without a junk folder fall back to delete-to-Trash.
 async function junkEmails(senderEmail, recipientAddress) {
   const subs = await loadSubscriptions();
   const sub = subs.find(s => s.senderEmail === senderEmail && s.recipientAddress === recipientAddress);
   if (!sub || !sub.messageGroups || sub.messageGroups.length === 0) {
-    return { junked: 0, deleted: 0 };
+    return { junked: 0, movedToSpam: 0, deleted: 0 };
   }
 
-  const { ids, unresolvedHeaderIds } = await resolveCurrentMessageIds(sub.messageGroups, null);
-  if (unresolvedHeaderIds.length > 0) {
-    console.warn(`[ThunderSub] ${unresolvedHeaderIds.length} message(s) could not be re-resolved before junking:`, unresolvedHeaderIds);
+  const accounts = await browser.accounts.list();
+  const junkFolderByAccountName = {};
+  for (const account of accounts) {
+    junkFolderByAccountName[account.name] = await findJunkFolderId(account);
   }
-  if (ids.length === 0) return { junked: 0, deleted: 0 };
 
   let junked = 0;
-  for (const id of ids) {
-    try {
-      await browser.messages.update(id, { junk: true });
-      junked++;
-    } catch (e) {
-      console.warn('Failed to mark message as junk:', e);
+  let movedToSpam = 0;
+  let deleted = 0;
+  let failedTotal = 0;
+  let totalIds = 0;
+
+  for (const group of sub.messageGroups) {
+    const { ids, unresolvedHeaderIds } = await resolveCurrentMessageIds([group], null);
+    if (unresolvedHeaderIds.length > 0) {
+      console.warn(`[ThunderSub] ${unresolvedHeaderIds.length} message(s) could not be re-resolved before junking:`, unresolvedHeaderIds);
+    }
+    if (ids.length === 0) continue;
+    totalIds += ids.length;
+
+    for (const id of ids) {
+      try {
+        await browser.messages.update(id, { junk: true });
+        junked++;
+      } catch (e) {
+        console.warn('Failed to mark message as junk:', e);
+      }
+    }
+
+    const junkFolderId = junkFolderByAccountName[group.accountName];
+    if (junkFolderId) {
+      const { moved, failed } = await moveMessagesInBatches(ids, junkFolderId);
+      movedToSpam += moved;
+      failedTotal += failed;
+    } else {
+      const { deleted: d, failed } = await deleteMessagesInBatches(ids);
+      deleted += d;
+      failedTotal += failed;
     }
   }
 
-  const { deleted, failed } = await deleteMessagesInBatches(ids);
-  if (failed > 0) {
+  if (failedTotal > 0) {
     // Junk flags already set are harmless; keep groups so a retry can finish.
-    throw new Error(`Failed to delete ${failed} of ${ids.length} emails.`);
+    throw new Error(`Failed to junk ${failedTotal} of ${totalIds} emails.`);
   }
 
   sub.messageGroups = [];
@@ -952,18 +1017,18 @@ async function junkEmails(senderEmail, recipientAddress) {
   sub.updatedAt = new Date().toISOString();
   await saveSubscriptions(subs);
 
-  return { junked, deleted };
+  return { junked, movedToSpam, deleted };
 }
 
 async function dryRunJunkEmails(senderEmail, recipientAddress) {
   const subs = await loadSubscriptions();
   const sub = subs.find(s => s.senderEmail === senderEmail && s.recipientAddress === recipientAddress);
   if (!sub || !sub.messageGroups || sub.messageGroups.length === 0) {
-    return { junked: 0, deleted: 0, dryRun: true };
+    return { junked: 0, movedToSpam: 0, deleted: 0, dryRun: true };
   }
   const ids = getIdsForFolders(sub.messageGroups, null);
-  console.log(`[DRY RUN] Would mark ${ids.length} emails from ${sub.senderName || ''} <${senderEmail}> → ${recipientAddress} as junk and delete them`);
-  return { junked: ids.length, deleted: ids.length, dryRun: true };
+  console.log(`[DRY RUN] Would mark ${ids.length} emails from ${sub.senderName || ''} <${senderEmail}> → ${recipientAddress} as junk and move them to the spam folder`);
+  return { junked: ids.length, movedToSpam: ids.length, deleted: 0, dryRun: true };
 }
 
 async function deleteEmails(senderEmail, recipientAddress, selectedFolders) {
@@ -1010,18 +1075,8 @@ async function moveEmails(senderEmail, recipientAddress, selectedFolders, destin
   let moved = 0;
   let failed = 0;
   let tracked;
-  const batchSize = 50;
   try {
-    for (let i = 0; i < ids.length; i += batchSize) {
-      const batch = ids.slice(i, i + batchSize);
-      try {
-        await browser.messages.move(batch, destinationFolderId);
-        moved += batch.length;
-      } catch (e) {
-        failed += batch.length;
-        console.warn('Failed to move batch:', e);
-      }
-    }
+    ({ moved, failed } = await moveMessagesInBatches(ids, destinationFolderId));
   } finally {
     // Give late onMoved events a moment to arrive, then stop listening.
     tracked = await tracker.finish(failed === 0 ? 2000 : 0);
