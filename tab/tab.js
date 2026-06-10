@@ -220,6 +220,39 @@ function updateDecisionStats(previousDecision, nextDecision) {
   adjust(nextDecision, 1);
 }
 
+function adjustStat(ids, amount) {
+  for (const id of ids) {
+    const el = document.getElementById(id);
+    const value = Number.parseInt(el?.textContent || '', 10);
+    if (el && Number.isFinite(value)) el.textContent = Math.max(0, value + amount);
+  }
+}
+
+function removeCachedSubscription(sub, dismissed = false) {
+  subsCache = subsCache.filter(s => s !== sub);
+  if (dismissed) {
+    adjustStat(['stat-total'], -1);
+    adjustStat({
+      pending: ['stat-pending', 'fb-pending'],
+      keep: ['stat-kept', 'fb-keep'],
+      unsubscribed: ['stat-unsub', 'fb-unsubscribed'],
+      error: ['stat-error', 'fb-error']
+    }[sub.decision] || [], -1);
+  }
+  refreshRecipientFilter();
+  renderFilteredCards();
+}
+
+function updateCachedDecision(sub, nextDecision) {
+  updateDecisionStats(sub.decision, nextDecision);
+  sub.decision = nextDecision;
+  if (nextDecision !== currentFilter) {
+    removeCachedSubscription(sub);
+  } else {
+    renderFilteredCards();
+  }
+}
+
 function formatLastScan(iso) {
   const d = new Date(iso);
   if (isNaN(d)) return '';
@@ -544,7 +577,7 @@ async function doJunk(senderEmail, recipientAddress) {
   if (!confirm(`Mark ${count} emails from ${name} as junk and move them to the spam folder? The sender will not be contacted.`)) return;
 
   try {
-    const result = await bg('junkEmails', { senderEmail, recipientAddress });
+    const result = await bg('junkEmails', { senderEmail, recipientAddress, messageGroups: sub.messageGroups });
     if (result?.dryRun) {
       toast(`Dry run: would mark ${result.junked || 0} emails as junk and move them to spam. No changes made.`, 'info');
     } else {
@@ -552,8 +585,7 @@ async function doJunk(senderEmail, recipientAddress) {
         ? 'deleted them (no spam folder found)'
         : 'moved them to spam';
       toast(`Marked ${result.junked || 0} emails from ${name} as junk and ${action}`, 'success');
-      loadStats();
-      loadSubs(currentFilter);
+      removeCachedSubscription(sub, true);
     }
   } catch (e) {
     toast('Failed to junk emails: ' + (e.message || e), 'error');
@@ -561,10 +593,11 @@ async function doJunk(senderEmail, recipientAddress) {
 }
 
 async function doDismiss(senderEmail, recipientAddress) {
+  const sub = subsCache.find(s => s.senderEmail === senderEmail && s.recipientAddress === recipientAddress);
+  if (!sub) return;
   try {
     await bg('dismiss', { senderEmail, recipientAddress });
-    loadStats();
-    loadSubs(currentFilter);
+    removeCachedSubscription(sub, true);
   } catch (e) {
     toast('Failed to dismiss: ' + (e.message || e), 'error');
   }
@@ -1170,6 +1203,7 @@ async function doUnsubscribeConfirm() {
   }
 
   // Apply dispose action on selected folders
+  let cleanupResult = null;
   if (dispose === 'delete' && selectedFolders.length > 0) {
     try {
       const result = await trace.bg('deleteEmails', {
@@ -1178,6 +1212,7 @@ async function doUnsubscribeConfirm() {
         messageGroups: sub.messageGroups,
         selectedFolders
       });
+      cleanupResult = result;
       if (result?.dryRun) toast(`Dry run: would delete ${result.deleted || 0} emails`, 'info');
       if (result?.cancelled && !result.actionCompleted) {
         if (modalMode !== 'cleanup') {
@@ -1206,6 +1241,7 @@ async function doUnsubscribeConfirm() {
         destinationFolderId: destination.id,
         destination
       });
+      cleanupResult = result;
       if (result?.dryRun) {
         toast(`Dry run: would move ${result.moved || 0} emails`, 'info');
       }
@@ -1251,21 +1287,13 @@ async function doUnsubscribeConfirm() {
     finishModalCancellation(trace, 'Current action completed before cancellation');
     return;
   }
-  updateDecisionStats(sub.decision, outcomeDecision);
-  sub.decision = outcomeDecision;
-
-  // Cleanup keeps the sub in its current category (e.g. an errored sub stays
-  // in Errors), so refresh the list in place rather than removing the card.
-  if (modalMode === 'cleanup') {
-    loadSubs(currentFilter);
-  } else {
-    const cardId = `card-${sid(modalSenderEmail, modalRecipientAddress)}`;
-    const card = document.getElementById(cardId);
-    if (card) {
-      card.classList.add('fading');
-      setTimeout(() => card.remove(), 300);
-    }
+  if (cleanupResult?.messageGroups) {
+    sub.messageGroups = cleanupResult.messageGroups;
+    sub.emailCount = cleanupResult.emailCount;
   }
+  sub.dispose = dispose;
+  sub.cleanupDestination = destination;
+  updateCachedDecision(sub, outcomeDecision);
 
   const name = sub.senderName || sub.senderEmail;
   if (modalMode === 'cleanup') {
@@ -1288,35 +1316,25 @@ async function doUnsubscribeConfirm() {
 
 // ── Keep action ──────────────────────────────────────────────────────────────
 async function doKeep(senderEmail, recipientAddress) {
-  const cardId = `card-${sid(senderEmail, recipientAddress)}`;
-  const card = document.getElementById(cardId);
+  const sub = subsCache.find(s => s.senderEmail === senderEmail && s.recipientAddress === recipientAddress);
+  if (!sub) return;
 
   try {
     await bg('decide', { senderEmail, recipientAddress, decision: 'keep', dispose: null });
     toast(`Kept subscription ${senderEmail}`, 'success');
-
-    if (card) {
-      if (currentFilter === 'pending' || currentFilter === 'unsubscribed') {
-        card.classList.add('fading');
-        setTimeout(() => card.remove(), 300);
-      } else {
-        const badgesEl = card.querySelector('.card-badges');
-        badgesEl.querySelectorAll('.badge-kept,.badge-unsub').forEach(b => b.remove());
-        badgesEl.insertAdjacentHTML('beforeend', '<span class="badge badge-kept">Kept</span>');
-      }
-    }
-    loadStats();
+    updateCachedDecision(sub, 'keep');
   } catch (e) {
     toast('Error: ' + e.message, 'error');
   }
 }
 
 async function doPending(senderEmail, recipientAddress) {
+  const sub = subsCache.find(s => s.senderEmail === senderEmail && s.recipientAddress === recipientAddress);
+  if (!sub) return;
   try {
     await bg('decide', { senderEmail, recipientAddress, decision: 'pending', dispose: null });
     toast(`Moved ${senderEmail} back to pending`, 'success');
-    loadStats();
-    loadSubs(currentFilter);
+    updateCachedDecision(sub, 'pending');
   } catch (e) {
     toast('Error: ' + (e.message || e), 'error');
   }

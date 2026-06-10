@@ -61,10 +61,6 @@ async function loadSubscriptions() {
   });
 }
 
-async function saveSubscriptions(subs) {
-  await browser.storage.local.set({ subscriptions: subs });
-}
-
 async function clearSubscriptionState() {
   const write = stateWriteQueue.then(() =>
     browser.storage.local.remove(['subscriptionDecisions', 'subscriptionUpdates']));
@@ -940,7 +936,7 @@ async function runScan() {
         dispose: carryPrevState ? prev.dispose : null,
         cleanupDestination: carryPrevState ? prev.cleanupDestination : null,
         error: carryPrevState ? prev.error : null,
-        dismissed: carryPrevState ? !!prev.dismissed : false,
+        dismissed: prev ? !!prev.dismissed : false,
         updatedAt: now
       });
     }
@@ -1113,10 +1109,9 @@ async function findJunkFolderId(account) {
 // address is never confirmed active. No delete: spam folders auto-purge, and
 // removing the message right after the move could undercut the report.
 // Accounts without a junk folder fall back to delete-to-Trash.
-async function junkEmails(senderEmail, recipientAddress) {
-  const subs = await loadSubscriptions();
-  const sub = subs.find(s => s.senderEmail === senderEmail && s.recipientAddress === recipientAddress);
-  if (!sub || !sub.messageGroups || sub.messageGroups.length === 0) {
+async function junkEmails(senderEmail, recipientAddress, messageGroups) {
+  messageGroups = await loadCurrentMessageGroups(senderEmail, recipientAddress, messageGroups);
+  if (!messageGroups || messageGroups.length === 0) {
     return { junked: 0, movedToSpam: 0, deleted: 0 };
   }
 
@@ -1132,7 +1127,7 @@ async function junkEmails(senderEmail, recipientAddress) {
   let failedTotal = 0;
   let totalIds = 0;
 
-  for (const group of sub.messageGroups) {
+  for (const group of messageGroups) {
     const { ids, unresolvedHeaderIds } = await resolveCurrentMessageIds([group], null);
     if (unresolvedHeaderIds.length > 0) {
       console.warn(`[ThunderSub] ${unresolvedHeaderIds.length} message(s) could not be re-resolved before junking:`, unresolvedHeaderIds);
@@ -1166,23 +1161,22 @@ async function junkEmails(senderEmail, recipientAddress) {
     throw new Error(`Failed to junk ${failedTotal} of ${totalIds} emails.`);
   }
 
-  sub.messageGroups = [];
-  sub.emailCount = 0;
-  sub.dismissed = true;
-  sub.updatedAt = new Date().toISOString();
-  await saveSubscriptions(subs);
+  await saveSubscriptionUpdate(senderEmail, recipientAddress, {
+    messageGroups: [],
+    emailCount: 0,
+    dismissed: true,
+    updatedAt: new Date().toISOString()
+  });
 
   return { junked, movedToSpam, deleted };
 }
 
-async function dryRunJunkEmails(senderEmail, recipientAddress) {
-  const subs = await loadSubscriptions();
-  const sub = subs.find(s => s.senderEmail === senderEmail && s.recipientAddress === recipientAddress);
-  if (!sub || !sub.messageGroups || sub.messageGroups.length === 0) {
+async function dryRunJunkEmails(senderEmail, recipientAddress, messageGroups) {
+  if (!messageGroups || messageGroups.length === 0) {
     return { junked: 0, movedToSpam: 0, deleted: 0, dryRun: true };
   }
-  const ids = getIdsForFolders(sub.messageGroups, null);
-  console.log(`[DRY RUN] Would mark ${ids.length} emails from ${sub.senderName || ''} <${senderEmail}> → ${recipientAddress} as junk and move them to the spam folder`);
+  const ids = getIdsForFolders(messageGroups, null);
+  console.log(`[DRY RUN] Would mark ${ids.length} emails from ${senderEmail} → ${recipientAddress} as junk and move them to the spam folder`);
   return { junked: ids.length, movedToSpam: ids.length, deleted: 0, dryRun: true };
 }
 
@@ -1217,7 +1211,13 @@ async function deleteEmails(senderEmail, recipientAddress, messageGroups, select
     updatedAt: new Date().toISOString()
   }, traceId);
 
-  return { deleted, cancelled: operationCancelled(traceId), actionCompleted: true };
+  return {
+    deleted,
+    cancelled: operationCancelled(traceId),
+    actionCompleted: true,
+    messageGroups: remainingGroups,
+    emailCount: totalMessageCount(remainingGroups)
+  };
 }
 
 async function moveEmails(senderEmail, recipientAddress, messageGroups, selectedFolders, destinationFolderId, destinationMeta, traceId) {
@@ -1275,7 +1275,13 @@ async function moveEmails(senderEmail, recipientAddress, messageGroups, selected
     updatedAt: new Date().toISOString()
   }, traceId);
 
-  return { moved, cancelled: operationCancelled(traceId), actionCompleted: true };
+  return {
+    moved,
+    cancelled: operationCancelled(traceId),
+    actionCompleted: true,
+    messageGroups: updatedGroups,
+    emailCount: totalMessageCount(updatedGroups)
+  };
 }
 
 // ── Other actions ────────────────────────────────────────────────────────────
@@ -1327,12 +1333,10 @@ async function getSubscriptions(filter) {
 }
 
 async function dismissSubscription(senderEmail, recipientAddress) {
-  const subs = await loadSubscriptions();
-  const sub = subs.find(s => s.senderEmail === senderEmail && s.recipientAddress === recipientAddress);
-  if (!sub) throw new Error('Subscription not found');
-  sub.dismissed = true;
-  sub.updatedAt = new Date().toISOString();
-  await saveSubscriptions(subs);
+  await saveSubscriptionUpdate(senderEmail, recipientAddress, {
+    dismissed: true,
+    updatedAt: new Date().toISOString()
+  });
 }
 
 // ── Dry-run functions for delete/move (no Thunderbird messages touched) ──────
@@ -1511,7 +1515,7 @@ browser.runtime.onMessage.addListener((request, sender) => {
 
     case 'junkEmails':
       return getDryRun().then(dryRun => (dryRun ? dryRunJunkEmails : junkEmails)(
-        request.senderEmail, request.recipientAddress));
+        request.senderEmail, request.recipientAddress, request.messageGroups));
 
     case 'deleteEmails':
       return getDryRun().then(dryRun => (dryRun ? dryRunDeleteEmails : deleteEmails)(
