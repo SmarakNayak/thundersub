@@ -7,7 +7,7 @@ Copy-paste the text blocks below into the corresponding fields of the submission
 
 ## Submission steps
 
-1. Build the package: `bash build.sh` → `dist/thundersub-2.0.xpi`.
+1. Build the package: `bash build.sh` → `dist/thundersub-1.0.xpi`.
 2. Sign in at <https://addons.thunderbird.net> (create an account if needed), then go to
    **Tools → Developer Hub → Submit a New Add-on**.
 3. Choose **"On this site"** (listed distribution — ATN hosts, signs, and serves updates automatically).
@@ -117,7 +117,7 @@ They show the real tab UI (unmodified `tab/tab.html`/`tab.css`/`tab.js`) rendere
 demo data (`.example` senders, `alex@example.net` recipient) — regenerate any time with
 `bash store/screenshots/make.sh` (needs chromium or nix).
 
-## Release notes for 2.0
+## Release notes for 1.0
 
 ```
 Initial public release.
