@@ -1281,9 +1281,10 @@ async function moveEmails(senderEmail, recipientAddress, messageGroups, selected
     ({ moved, failed } = await moveMessages(ids, destinationFolderId));
     tracePhase(traceId, 'move-messages-api', startedAt, { requested: ids.length, moved, failed });
   } finally {
-    // Give late onMoved events a moment to arrive, then stop listening.
+    // Use events delivered while messages.move() was in flight. Some backends
+    // never emit onMoved, so do not add a fixed grace wait before fallback.
     startedAt = Date.now();
-    tracked = await tracker.finish(failed === 0 ? 2000 : 0);
+    tracked = await tracker.finish(0);
     tracePhase(traceId, 'move-event-wait', startedAt, {
       movedEvents: tracked.movedHeaders.length,
       unresolved: tracked.unresolvedCount
