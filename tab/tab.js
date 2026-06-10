@@ -574,6 +574,41 @@ let modalMode = 'unsubscribe';
 let modalIsRetry = false;
 let modalSelectedMethod = null;
 let cleanupDefaultAction = null;
+let modalOperationTraceId = null;
+
+function resetModalProgress() {
+  modalOperationTraceId = null;
+  const progress = document.getElementById('modal-progress');
+  progress.classList.remove('active');
+  document.getElementById('modal-progress-bar').style.width = '0';
+  document.getElementById('modal-progress-text').textContent = 'Working...';
+  document.getElementById('modal-cancel').disabled = false;
+}
+
+function showModalProgress(traceId, message, percent) {
+  modalOperationTraceId = traceId;
+  document.getElementById('modal-progress').classList.add('active');
+  document.getElementById('modal-progress-text').textContent = message;
+  document.getElementById('modal-progress-bar').style.width = `${Math.max(0, Math.min(100, percent))}%`;
+  document.getElementById('modal-cancel').disabled = true;
+}
+
+function cleanupProgressPercent(phase, current, total) {
+  if (phase === 'resolving') return total > 0 ? 15 + Math.round((current / total) * 50) : 65;
+  if (phase === 'deleting' || phase === 'moving') return 75;
+  if (phase === 'saving') return 90;
+  if (phase === 'finalizing') return 96;
+  return 5;
+}
+
+browser.runtime.onMessage.addListener(request => {
+  if (request.command !== 'cleanupProgress' || request.traceId !== modalOperationTraceId) return;
+  showModalProgress(
+    request.traceId,
+    request.message || 'Working...',
+    cleanupProgressPercent(request.phase, request.current, request.total)
+  );
+});
 
 function modalConfirmLabel() {
   if (modalMode === 'cleanup') return 'Apply';
@@ -607,6 +642,7 @@ function openUnsubModal(senderEmail, recipientAddress, isRetry = false) {
   modalIsRetry = isRetry;
   modalSelectedMethod = null;
   cleanupDefaultAction = null;
+  resetModalProgress();
 
   const method = getBestMethod(sub);
   const methodLabel = method ? METHOD_LABELS[method.type] : 'none';
@@ -680,6 +716,7 @@ function openCleanupModal(senderEmail, recipientAddress, action) {
   modalIsRetry = false;
   modalSelectedMethod = null;
   cleanupDefaultAction = action;
+  resetModalProgress();
 
   const statusLabel = sub.decision === 'error'
     ? (sub.error?.stage === 'unsubscribe' ? 'unsubscribe failed' : `${sub.error?.stage || 'action'} failed`)
@@ -720,6 +757,7 @@ function openCleanupModal(senderEmail, recipientAddress, action) {
 }
 
 function closeUnsubModal() {
+  if (modalOperationTraceId) return;
   document.getElementById('unsub-modal-overlay').classList.remove('open');
   modalSenderEmail = null;
   modalRecipientAddress = null;
@@ -968,6 +1006,7 @@ async function doUnsubscribeConfirm() {
   const confirmBtn = document.getElementById('modal-confirm');
   confirmBtn.disabled = true;
   confirmBtn.textContent = 'Checking...';
+  showModalProgress(trace.id, modalMode === 'cleanup' ? 'Preparing cleanup...' : 'Sending unsubscribe request...', 5);
 
   try {
     const result = await trace.bg('getDryRun');
@@ -982,6 +1021,7 @@ async function doUnsubscribeConfirm() {
     toast(dryRunSummary(sub, method, dispose, selectedFolders, destination), 'info');
     confirmBtn.disabled = false;
     confirmBtn.textContent = modalConfirmLabel();
+    resetModalProgress();
     closeUnsubModal();
     trace.log('unsubscribe:dry-run-complete');
     return;
@@ -1030,9 +1070,10 @@ async function doUnsubscribeConfirm() {
     toast(message, 'error');
     confirmBtn.disabled = false;
     confirmBtn.textContent = modalConfirmLabel();
-    closeUnsubModal();
     showErrorsView();
     trace.log('unsubscribe:failed', undefined, { stage: 'unsubscribe' });
+    resetModalProgress();
+    closeUnsubModal();
     return;
   }
 
@@ -1059,6 +1100,7 @@ async function doUnsubscribeConfirm() {
     toast(msg, 'error');
     confirmBtn.disabled = false;
     confirmBtn.textContent = modalConfirmLabel();
+    resetModalProgress();
     closeUnsubModal();
     loadSubs(currentFilter);
     trace.log('unsubscribe:cleanup-failed', undefined, { stage });
@@ -1119,6 +1161,7 @@ async function doUnsubscribeConfirm() {
     confirmBtn.disabled = false;
     confirmBtn.textContent = modalConfirmLabel();
     trace.log('unsubscribe:failed', undefined, { stage: 'persist-decision' });
+    resetModalProgress();
     return;
   }
   updateDecisionStats(sub.decision, outcomeDecision);
@@ -1150,6 +1193,8 @@ async function doUnsubscribeConfirm() {
     toast(`Unsubscribed from ${name} (request may have failed)`, 'error');
   }
 
+  showModalProgress(trace.id, 'Complete', 100);
+  resetModalProgress();
   closeUnsubModal();
   trace.log('unsubscribe:complete');
 }

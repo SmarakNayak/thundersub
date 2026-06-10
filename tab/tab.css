@@ -266,6 +266,11 @@ label.modal-addr-row:hover{background:rgba(0,0,0,.3)}
 .dispose-option:hover{background:rgba(0,0,0,.3)}
 .dispose-option input{accent-color:var(--accent)}
 .modal-footer{display:flex;justify-content:flex-end;gap:8px;margin-top:20px}
+.modal-progress{display:none;margin-top:18px}
+.modal-progress.active{display:block}
+.modal-progress-text{font-size:12px;color:var(--muted);margin-bottom:6px}
+.modal-progress-track{height:6px;background:var(--border);border-radius:3px;overflow:hidden}
+.modal-progress-bar{height:100%;width:0;background:var(--accent);border-radius:3px;transition:width .2s}
 
 /* Toast */
 #toast-container{position:fixed;bottom:20px;right:20px;display:flex;flex-direction:column;gap:8px;z-index:9999}

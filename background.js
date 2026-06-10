@@ -21,7 +21,6 @@ let scanState = {
   stopped: false
 };
 const SESSION_ID = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
-const MESSAGE_LOOKUP_CONCURRENCY = 8;
 
 // ── Storage helpers ──────────────────────────────────────────────────────────
 let stateWriteQueue = Promise.resolve();
@@ -33,6 +32,18 @@ function subscriptionKey(senderEmail, recipientAddress) {
 function tracePhase(traceId, phase, startedAt, details = {}) {
   if (!traceId) return;
   console.log(`[ThunderSub trace ${traceId}] bg:${phase} +${Date.now() - startedAt}ms`, details);
+}
+
+function reportCleanupProgress(traceId, phase, current, total, message) {
+  if (!traceId) return;
+  browser.runtime.sendMessage({
+    command: 'cleanupProgress',
+    traceId,
+    phase,
+    current,
+    total,
+    message
+  }).catch(() => {});
 }
 
 async function loadSubscriptions() {
@@ -530,38 +541,43 @@ async function resolveCurrentMessageIds(groups, selectedFolders, traceId) {
     }
   }
 
-  const lookupConcurrency = Math.min(MESSAGE_LOOKUP_CONCURRENCY, lookupTasks.length);
-  const workers = Array.from(
-    { length: lookupConcurrency },
-    async () => {
-      while (lookupTasks.length > 0) {
-        const { folderId, headerMessageId } = lookupTasks.pop();
-        const queryStartedAt = Date.now();
-        let found = [];
-        try {
-          found = await queryByHeaderMessageId(folderId, headerMessageId);
-        } catch (e) {
-          console.warn('[ThunderSub] Failed to resolve message by header id', headerMessageId, e);
-        }
-        const duration = Date.now() - queryStartedAt;
-        targetedQueries++;
-        queryMs += duration;
-        slowestQueryMs = Math.max(slowestQueryMs, duration);
-        if (found.length === 0) {
-          unresolvedHeaderIds.add(headerMessageId);
-          continue;
-        }
-        for (const message of found) ids.add(message.id);
-      }
+  const lookupTotal = lookupTasks.length;
+  let lookupsCompleted = 0;
+  reportCleanupProgress(traceId, 'resolving', 0, lookupTotal, lookupTotal > 0
+    ? `Locating messages: 0 of ${lookupTotal}`
+    : 'Messages are ready');
+  for (const { folderId, headerMessageId } of lookupTasks) {
+    const queryStartedAt = Date.now();
+    let found = [];
+    try {
+      found = await queryByHeaderMessageId(folderId, headerMessageId);
+    } catch (e) {
+      console.warn('[ThunderSub] Failed to resolve message by header id', headerMessageId, e);
     }
-  );
-  await Promise.all(workers);
+    const duration = Date.now() - queryStartedAt;
+    targetedQueries++;
+    lookupsCompleted++;
+    queryMs += duration;
+    slowestQueryMs = Math.max(slowestQueryMs, duration);
+    reportCleanupProgress(
+      traceId,
+      'resolving',
+      lookupsCompleted,
+      lookupTotal,
+      `Locating messages: ${lookupsCompleted} of ${lookupTotal}`
+    );
+    if (found.length === 0) {
+      unresolvedHeaderIds.add(headerMessageId);
+      continue;
+    }
+    for (const message of found) ids.add(message.id);
+  }
 
   tracePhase(traceId, 'resolve-message-ids', startedAt, {
     groups: selected.length,
     sessionGroups,
     targetedQueries,
-    concurrency: lookupConcurrency,
+    concurrency: lookupTotal > 0 ? 1 : 0,
     queryMs,
     slowestQueryMs,
     resolved: ids.size,
@@ -1221,6 +1237,7 @@ async function deleteEmails(senderEmail, recipientAddress, messageGroups, select
   }
   if (ids.length === 0) return { deleted: 0 };
 
+  reportCleanupProgress(traceId, 'deleting', 0, ids.length, `Deleting ${ids.length} messages...`);
   startedAt = Date.now();
   const { deleted, failed } = await deleteMessages(ids);
   tracePhase(traceId, 'delete-messages-api', startedAt, { requested: ids.length, deleted, failed });
@@ -1229,6 +1246,7 @@ async function deleteEmails(senderEmail, recipientAddress, messageGroups, select
     throw new Error(`Failed to delete ${failed} of ${ids.length} emails.`);
   }
 
+  reportCleanupProgress(traceId, 'saving', 0, 1, 'Saving cleanup state...');
   const remainingGroups = removeGroupsForFolders(messageGroups, selectedFolders);
   await saveSubscriptionUpdate(senderEmail, recipientAddress, {
     messageGroups: remainingGroups,
@@ -1253,6 +1271,7 @@ async function moveEmails(senderEmail, recipientAddress, messageGroups, selected
   if (ids.length === 0) return { moved: 0 };
   const headerMessageIds = getHeaderIdsForFolders(messageGroups, selectedFolders);
 
+  reportCleanupProgress(traceId, 'moving', 0, ids.length, `Moving ${ids.length} messages...`);
   const tracker = startMoveTracking(ids);
   let moved = 0;
   let failed = 0;
@@ -1292,6 +1311,7 @@ async function moveEmails(senderEmail, recipientAddress, messageGroups, selected
     }
   }
 
+  reportCleanupProgress(traceId, 'saving', 0, 1, 'Saving cleanup state...');
   const updatedGroups = movedGroup ? [...remainingGroups, movedGroup] : remainingGroups;
   await saveSubscriptionUpdate(senderEmail, recipientAddress, {
     messageGroups: updatedGroups,
@@ -1319,6 +1339,7 @@ async function setDecision(senderEmail, recipientAddress, decision, dispose, cle
     updatedAt: new Date().toISOString()
   };
 
+  reportCleanupProgress(traceId, 'finalizing', 0, 1, 'Saving subscription status...');
   const write = stateWriteQueue.then(async () => {
     const result = await browser.storage.local.get('subscriptionDecisions');
     const decisions = result.subscriptionDecisions || {};
