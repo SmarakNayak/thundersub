@@ -22,13 +22,29 @@ let scanState = {
 };
 
 // ── Storage helpers ──────────────────────────────────────────────────────────
+let decisionWriteQueue = Promise.resolve();
+
+function subscriptionKey(senderEmail, recipientAddress) {
+  return JSON.stringify([senderEmail, recipientAddress || '']);
+}
+
 async function loadSubscriptions() {
-  const result = await browser.storage.local.get('subscriptions');
-  return result.subscriptions || [];
+  const result = await browser.storage.local.get(['subscriptions', 'subscriptionDecisions']);
+  const decisions = result.subscriptionDecisions || {};
+  return (result.subscriptions || []).map(sub => {
+    const decision = decisions[subscriptionKey(sub.senderEmail, sub.recipientAddress)];
+    return decision ? { ...sub, ...decision } : sub;
+  });
 }
 
 async function saveSubscriptions(subs) {
   await browser.storage.local.set({ subscriptions: subs });
+}
+
+async function clearSubscriptionDecisions() {
+  const write = decisionWriteQueue.then(() => browser.storage.local.remove('subscriptionDecisions'));
+  decisionWriteQueue = write.catch(() => {});
+  await write;
 }
 
 async function getLastScan() {
@@ -66,8 +82,8 @@ async function fullReset() {
   if (scanState.status === 'scanning') {
     throw new Error('Stop the active scan before running a full reset.');
   }
-  await browser.storage.local.remove('subscriptions');
-  await browser.storage.local.remove('lastScan');
+  await clearSubscriptionDecisions();
+  await browser.storage.local.remove(['subscriptions', 'lastScan']);
   scanState = {
     status: 'idle',
     progress: 0,
@@ -841,6 +857,9 @@ async function runScan() {
     }
 
     await saveSubscriptions(merged);
+    // The merged scan result now contains the latest decisions. Clear the
+    // lightweight overlays so old pending/error states cannot outlive a rescan.
+    await clearSubscriptionDecisions();
 
     const finalMessagesScanned = scanState.messagesScanned;
     const finalSendersFound = Object.keys(subs).length;
@@ -1161,16 +1180,23 @@ async function moveEmails(senderEmail, recipientAddress, selectedFolders, destin
 
 // ── Other actions ────────────────────────────────────────────────────────────
 async function setDecision(senderEmail, recipientAddress, decision, dispose, cleanupDestination, error) {
-  const subs = await loadSubscriptions();
-  const sub = subs.find(s => s.senderEmail === senderEmail && s.recipientAddress === recipientAddress);
-  if (!sub) throw new Error('Subscription not found');
+  const key = subscriptionKey(senderEmail, recipientAddress);
+  const update = {
+    decision,
+    dispose: dispose || null,
+    cleanupDestination: cleanupDestination || null,
+    error: error || null,
+    updatedAt: new Date().toISOString()
+  };
 
-  sub.decision = decision;
-  sub.dispose = dispose || null;
-  sub.cleanupDestination = cleanupDestination || null;
-  sub.error = error || null;
-  sub.updatedAt = new Date().toISOString();
-  await saveSubscriptions(subs);
+  const write = decisionWriteQueue.then(async () => {
+    const result = await browser.storage.local.get('subscriptionDecisions');
+    const decisions = result.subscriptionDecisions || {};
+    decisions[key] = update;
+    await browser.storage.local.set({ subscriptionDecisions: decisions });
+  });
+  decisionWriteQueue = write.catch(() => {});
+  await write;
 }
 
 async function getStats() {

@@ -1088,23 +1088,28 @@ async function doUnsubscribeConfirm() {
 async function doKeep(senderEmail, recipientAddress) {
   const cardId = `card-${sid(senderEmail, recipientAddress)}`;
   const card = document.getElementById(cardId);
+  const sub = subsCache.find(s => s.senderEmail === senderEmail && s.recipientAddress === recipientAddress);
+  const previousDecision = sub?.decision;
+
+  if (sub) sub.decision = 'keep';
+  if (card) {
+    if (currentFilter === 'pending' || currentFilter === 'unsubscribed') {
+      card.classList.add('fading');
+      setTimeout(() => card.remove(), 300);
+    } else {
+      const badgesEl = card.querySelector('.card-badges');
+      badgesEl.querySelectorAll('.badge-kept,.badge-unsub').forEach(b => b.remove());
+      badgesEl.insertAdjacentHTML('beforeend', '<span class="badge badge-kept">Kept</span>');
+    }
+  }
 
   try {
     await bg('decide', { senderEmail, recipientAddress, decision: 'keep', dispose: null });
     toast(`Kept subscription ${senderEmail}`, 'success');
-
-    if (card) {
-      if (currentFilter === 'pending' || currentFilter === 'unsubscribed') {
-        card.classList.add('fading');
-        setTimeout(() => card.remove(), 300);
-      } else {
-        const badgesEl = card.querySelector('.card-badges');
-        badgesEl.querySelectorAll('.badge-kept,.badge-unsub').forEach(b => b.remove());
-        badgesEl.insertAdjacentHTML('beforeend', '<span class="badge badge-kept">Kept</span>');
-      }
-    }
     loadStats();
   } catch (e) {
+    if (sub) sub.decision = previousDecision;
+    renderFilteredCards();
     toast('Error: ' + e.message, 'error');
   }
 }
