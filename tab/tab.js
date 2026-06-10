@@ -579,22 +579,61 @@ let modalIsRetry = false;
 let modalSelectedMethod = null;
 let cleanupDefaultAction = null;
 let modalOperationTraceId = null;
+let modalCancelRequested = false;
 
 function resetModalProgress() {
   modalOperationTraceId = null;
+  modalCancelRequested = false;
   const progress = document.getElementById('modal-progress');
   progress.classList.remove('active');
   document.getElementById('modal-progress-bar').style.width = '0';
   document.getElementById('modal-progress-text').textContent = 'Working...';
-  document.getElementById('modal-cancel').disabled = false;
+  const cancelBtn = document.getElementById('modal-cancel');
+  cancelBtn.disabled = false;
+  cancelBtn.textContent = 'Cancel';
 }
 
 function showModalProgress(traceId, message, percent) {
   modalOperationTraceId = traceId;
   document.getElementById('modal-progress').classList.add('active');
-  document.getElementById('modal-progress-text').textContent = message;
+  if (!modalCancelRequested) {
+    document.getElementById('modal-progress-text').textContent = message;
+  }
   document.getElementById('modal-progress-bar').style.width = `${Math.max(0, Math.min(100, percent))}%`;
-  document.getElementById('modal-cancel').disabled = true;
+}
+
+async function cancelOrCloseUnsubModal() {
+  if (!modalOperationTraceId) {
+    closeUnsubModal();
+    return;
+  }
+  if (modalCancelRequested) return;
+
+  modalCancelRequested = true;
+  const cancelBtn = document.getElementById('modal-cancel');
+  cancelBtn.disabled = true;
+  cancelBtn.textContent = 'Cancelling...';
+  document.getElementById('modal-progress-text').textContent = 'Cancelling after the current action...';
+  try {
+    await bg('cancelOperation', { traceId: modalOperationTraceId });
+  } catch (e) {
+    toast('Failed to request cancellation: ' + (e.message || e), 'error');
+    modalCancelRequested = false;
+    cancelBtn.disabled = false;
+    cancelBtn.textContent = 'Cancel';
+  }
+}
+
+function finishModalCancellation(trace, message = 'Operation cancelled') {
+  const confirmBtn = document.getElementById('modal-confirm');
+  confirmBtn.disabled = false;
+  confirmBtn.textContent = modalConfirmLabel();
+  resetModalProgress();
+  closeUnsubModal();
+  loadStats();
+  loadSubs(currentFilter);
+  toast(message, 'info');
+  trace.log('unsubscribe:cancelled');
 }
 
 function cleanupProgressPercent(phase, current, total) {
@@ -1021,6 +1060,11 @@ async function doUnsubscribeConfirm() {
     document.getElementById('dry-run-toggle').checked = false;
   }
 
+  if (modalCancelRequested) {
+    finishModalCancellation(trace);
+    return;
+  }
+
   if (dryRun) {
     toast(dryRunSummary(sub, method, dispose, selectedFolders, destination), 'info');
     confirmBtn.disabled = false;
@@ -1058,6 +1102,21 @@ async function doUnsubscribeConfirm() {
     } catch (e) {
       ok = false;
     }
+  }
+
+  if (modalCancelRequested) {
+    if (modalMode !== 'cleanup' && ok) {
+      await trace.bg('decide', {
+        senderEmail: modalSenderEmail,
+        recipientAddress: modalRecipientAddress,
+        decision: 'unsubscribed',
+        dispose: null
+      });
+    }
+    finishModalCancellation(trace, ok && modalMode !== 'cleanup'
+      ? 'Unsubscribed; remaining actions cancelled'
+      : 'Operation cancelled');
+    return;
   }
 
   if (!ok) {
@@ -1120,6 +1179,19 @@ async function doUnsubscribeConfirm() {
         selectedFolders
       });
       if (result?.dryRun) toast(`Dry run: would delete ${result.deleted || 0} emails`, 'info');
+      if (result?.cancelled && !result.actionCompleted) {
+        if (modalMode !== 'cleanup') {
+          await trace.bg('decide', {
+            senderEmail: modalSenderEmail,
+            recipientAddress: modalRecipientAddress,
+            decision: outcomeDecision,
+            dispose: null,
+            error: outcomeDecision === 'error' ? sub.error : undefined
+          });
+        }
+        finishModalCancellation(trace);
+        return;
+      }
     } catch (e) {
       await handleCleanupFailure('deleting', e);
       return;
@@ -1136,6 +1208,19 @@ async function doUnsubscribeConfirm() {
       });
       if (result?.dryRun) {
         toast(`Dry run: would move ${result.moved || 0} emails`, 'info');
+      }
+      if (result?.cancelled && !result.actionCompleted) {
+        if (modalMode !== 'cleanup') {
+          await trace.bg('decide', {
+            senderEmail: modalSenderEmail,
+            recipientAddress: modalRecipientAddress,
+            decision: outcomeDecision,
+            dispose: null,
+            error: outcomeDecision === 'error' ? sub.error : undefined
+          });
+        }
+        finishModalCancellation(trace);
+        return;
       }
     } catch (e) {
       await handleCleanupFailure('moving', e);
@@ -1159,6 +1244,11 @@ async function doUnsubscribeConfirm() {
     confirmBtn.textContent = modalConfirmLabel();
     trace.log('unsubscribe:failed', undefined, { stage: 'persist-decision' });
     resetModalProgress();
+    return;
+  }
+
+  if (modalCancelRequested) {
+    finishModalCancellation(trace, 'Current action completed before cancellation');
     return;
   }
   updateDecisionStats(sub.decision, outcomeDecision);
@@ -1340,7 +1430,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   document.getElementById('full-reset-btn').addEventListener('click', doFullReset);
   attachCardListeners();
 
-  document.getElementById('modal-cancel').addEventListener('click', closeUnsubModal);
+  document.getElementById('modal-cancel').addEventListener('click', cancelOrCloseUnsubModal);
   document.getElementById('modal-confirm').addEventListener('click', doUnsubscribeConfirm);
   document.getElementById('unsub-modal-overlay').addEventListener('click', (e) => {
     if (e.target.id === 'unsub-modal-overlay') closeUnsubModal();

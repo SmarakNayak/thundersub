@@ -21,6 +21,7 @@ let scanState = {
   stopped: false
 };
 const SESSION_ID = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
+const cancelledOperations = new Set();
 
 // ── Storage helpers ──────────────────────────────────────────────────────────
 let stateWriteQueue = Promise.resolve();
@@ -44,6 +45,10 @@ function reportCleanupProgress(traceId, phase, current, total, message) {
     total,
     message
   }).catch(() => {});
+}
+
+function operationCancelled(traceId) {
+  return Boolean(traceId && cancelledOperations.has(traceId));
 }
 
 async function loadSubscriptions() {
@@ -548,6 +553,7 @@ async function resolveCurrentMessageIds(groups, selectedFolders, traceId) {
     ? `Locating messages: 0 of ${lookupTotal}`
     : 'Messages are ready');
   for (const { folderId, headerMessageId } of lookupTasks) {
+    if (operationCancelled(traceId)) break;
     const queryStartedAt = Date.now();
     let found = [];
     try {
@@ -584,7 +590,11 @@ async function resolveCurrentMessageIds(groups, selectedFolders, traceId) {
     resolved: ids.size,
     unresolved: unresolvedHeaderIds.size
   });
-  return { ids: [...ids], unresolvedHeaderIds: [...unresolvedHeaderIds] };
+  return {
+    ids: [...ids],
+    unresolvedHeaderIds: [...unresolvedHeaderIds],
+    cancelled: operationCancelled(traceId)
+  };
 }
 
 function getHeaderIdsForFolders(groups, selectedFolders) {
@@ -1183,7 +1193,8 @@ async function deleteEmails(senderEmail, recipientAddress, messageGroups, select
     return { deleted: 0 };
   }
 
-  const { ids, unresolvedHeaderIds } = await resolveCurrentMessageIds(messageGroups, selectedFolders, traceId);
+  const { ids, unresolvedHeaderIds, cancelled } = await resolveCurrentMessageIds(messageGroups, selectedFolders, traceId);
+  if (cancelled) return { deleted: 0, cancelled: true, actionCompleted: false };
   if (unresolvedHeaderIds.length > 0) {
     console.warn(`[ThunderSub] ${unresolvedHeaderIds.length} message(s) could not be re-resolved before delete (moved or removed):`, unresolvedHeaderIds);
   }
@@ -1206,7 +1217,7 @@ async function deleteEmails(senderEmail, recipientAddress, messageGroups, select
     updatedAt: new Date().toISOString()
   }, traceId);
 
-  return { deleted };
+  return { deleted, cancelled: operationCancelled(traceId), actionCompleted: true };
 }
 
 async function moveEmails(senderEmail, recipientAddress, messageGroups, selectedFolders, destinationFolderId, destinationMeta, traceId) {
@@ -1216,7 +1227,8 @@ async function moveEmails(senderEmail, recipientAddress, messageGroups, selected
     return { moved: 0 };
   }
 
-  const { ids, unresolvedHeaderIds } = await resolveCurrentMessageIds(messageGroups, selectedFolders, traceId);
+  const { ids, unresolvedHeaderIds, cancelled } = await resolveCurrentMessageIds(messageGroups, selectedFolders, traceId);
+  if (cancelled) return { moved: 0, cancelled: true, actionCompleted: false };
   if (unresolvedHeaderIds.length > 0) {
     console.warn(`[ThunderSub] ${unresolvedHeaderIds.length} message(s) could not be re-resolved before move (moved or removed):`, unresolvedHeaderIds);
   }
@@ -1263,7 +1275,7 @@ async function moveEmails(senderEmail, recipientAddress, messageGroups, selected
     updatedAt: new Date().toISOString()
   }, traceId);
 
-  return { moved };
+  return { moved, cancelled: operationCancelled(traceId), actionCompleted: true };
 }
 
 // ── Other actions ────────────────────────────────────────────────────────────
@@ -1459,6 +1471,13 @@ browser.runtime.onMessage.addListener((request, sender) => {
     case 'stopScan':
       scanState.stopped = true;
       scanState.paused = false;
+      return Promise.resolve({ ok: true });
+
+    case 'cancelOperation':
+      if (request.traceId) {
+        cancelledOperations.add(request.traceId);
+        setTimeout(() => cancelledOperations.delete(request.traceId), 10 * 60 * 1000);
+      }
       return Promise.resolve({ ok: true });
 
     case 'getStats':
