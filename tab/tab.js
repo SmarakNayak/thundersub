@@ -1302,23 +1302,28 @@ async function doUnsubscribeConfirm() {
   sub.cleanupDestination = destination;
   updateCachedDecision(sub, outcomeDecision);
 
+  const name = sub.senderName || sub.senderEmail;
+  let outcomeMessage;
+  let outcomeType = 'success';
+  if (modalMode === 'cleanup') {
+    outcomeMessage = `Updated email cleanup for ${name}`;
+  } else if (unsubscribeResult?.drafted) {
+    outcomeMessage = `Prepared unsubscribe email draft for ${name}`;
+  } else if (unsubscribeResult?.sent) {
+    outcomeMessage = `Sent unsubscribe email for ${name}`;
+  } else if (ok) {
+    outcomeMessage = `Unsubscribed from ${name}`;
+  } else {
+    outcomeMessage = `Unsubscribed from ${name} (request may have failed)`;
+    outcomeType = 'error';
+  }
+
   if (modalCancelRequested) {
-    finishModalCancellation(trace, 'Current action completed before cancellation');
+    finishModalCancellation(trace, `${outcomeMessage} — completed before cancellation took effect`);
     return;
   }
 
-  const name = sub.senderName || sub.senderEmail;
-  if (modalMode === 'cleanup') {
-    toast(`Updated email cleanup for ${name}`, 'success');
-  } else if (unsubscribeResult?.drafted) {
-    toast(`Prepared unsubscribe email draft for ${name}`, 'success');
-  } else if (unsubscribeResult?.sent) {
-    toast(`Sent unsubscribe email for ${name}`, 'success');
-  } else if (ok) {
-    toast(`Unsubscribed from ${name}`, 'success');
-  } else {
-    toast(`Unsubscribed from ${name} (request may have failed)`, 'error');
-  }
+  toast(outcomeMessage, outcomeType);
 
   showModalProgress(trace.id, 'Complete', 100);
   resetModalProgress();
