@@ -9,6 +9,7 @@ let hasScannedBefore = false;
 let scanInProgress = false;
 let currentRecipientFilter = '';
 let currentSort = 'count';
+const SHOW_DETECTION_UI = false;
 
 // The scan button reads "Rescan Emails" once a scan has produced data, else
 // "Scan Emails". Only touches the label while the button is idle so it never
@@ -372,10 +373,6 @@ function buildCard(s) {
 
   // Badges
   let badges = `<span class="badge badge-blue">${s.emailCount} emails</span>`;
-  const headerCount = s.detectionCounts?.header || 0;
-  const embeddedCount = s.detectionCounts?.embedded || 0;
-  if (headerCount) badges += `<span class="badge badge-green" title="Detected from List-Unsubscribe headers">${headerCount} header</span>`;
-  if (embeddedCount) badges += `<span class="badge badge-purple" title="Detected from unsubscribe links in message bodies">${embeddedCount} embedded</span>`;
   if (s.decision === 'keep') badges += `<span class="badge badge-kept">Kept</span>`;
   if (s.decision === 'unsubscribed') {
     badges += `<span class="badge badge-unsub">Unsubscribed</span>`;
@@ -407,9 +404,9 @@ function buildCard(s) {
     ${s.recipientAddress ? `<div class="card-accounts" title="Delivered to ${esc(s.recipientAddress)}">→ ${esc(s.recipientAddress)}</div>` : ''}
     ${s.sampleSubject ? `<div class="card-subject" title="${esc(s.sampleSubject)}">"${esc(s.sampleSubject.substring(0, 80))}"</div>` : ''}
     ${s.error?.message ? `<div class="card-error" title="${esc(s.error.message)}">${esc(s.error.stage || 'Error')}: ${esc(s.error.message)}</div>` : ''}
-    <button class="evidence-toggle js-evidence-toggle" type="button">Why detected?</button>
+    ${SHOW_DETECTION_UI ? '<button class="evidence-toggle js-evidence-toggle" type="button">Why detected?</button>' : ''}
   </div>
-  <div class="detection-evidence">${buildDetectionEvidence(s)}</div>
+  ${SHOW_DETECTION_UI ? `<div class="detection-evidence">${buildDetectionEvidence(s)}</div>` : ''}
   <div class="card-actions">
     ${buildActions(s)}
   </div>
