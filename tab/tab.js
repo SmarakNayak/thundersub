@@ -979,8 +979,16 @@ async function doUnsubscribeConfirm() {
           destinationFolderId: destination.id,
           destination
         });
-        if (result?.dryRun) toast(`Dry run: would move ${result.moved || 0} emails`, 'info');
-        else if (result && !result.resolved) toast('Moved emails, but could not locate them in the destination yet. Run a scan to manage them again.', 'info');
+        if (result?.dryRun) {
+          toast(`Dry run: would move ${result.moved || 0} emails`, 'info');
+        } else if (result) {
+          const missing = (result.moved || 0) - (result.resolvedCount || 0);
+          if (missing > 0 && missing >= (result.moved || 0)) {
+            toast('Moved emails, but could not locate them in the destination yet. Run a scan to manage them again.', 'info');
+          } else if (missing > 0) {
+            toast(`Moved ${result.moved} emails, but ${missing} could not be located in the destination yet. Run a scan to manage them again.`, 'info');
+          }
+        }
       } catch (e) {
         await handleCleanupFailure('moving', e);
         return;

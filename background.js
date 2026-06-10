@@ -459,13 +459,73 @@ async function queryByHeaderMessageId(folderId, headerMessageId) {
   return [];
 }
 
+// Track messages.onMoved while move calls are in flight so each moved
+// message's new id is learned directly from the event (exact old->new
+// mapping) instead of re-querying the destination folder afterwards.
+function startMoveTracking(originalIds) {
+  const pending = new Set(originalIds);
+  const movedHeaders = [];
+  const listener = (originalList, movedList) => {
+    const from = (originalList && originalList.messages) || [];
+    const to = (movedList && movedList.messages) || [];
+    for (let i = 0; i < from.length && i < to.length; i++) {
+      if (pending.has(from[i].id)) {
+        pending.delete(from[i].id);
+        movedHeaders.push(to[i]);
+      }
+    }
+  };
+  browser.messages.onMoved.addListener(listener);
+  return {
+    async finish(graceMs) {
+      const deadline = Date.now() + graceMs;
+      while (pending.size > 0 && Date.now() < deadline) {
+        await new Promise(resolve => setTimeout(resolve, 100));
+      }
+      browser.messages.onMoved.removeListener(listener);
+      return { movedHeaders, unresolvedCount: pending.size };
+    }
+  };
+}
+
+function groupFromMovedHeaders(headers, destinationFolderId, destinationMeta) {
+  if (!headers.length) return null;
+  const group = {
+    accountName: destinationMeta?.accountName || '',
+    folderName: destinationMeta?.folderName || destinationMeta?.folderPath || 'Moved',
+    folderId: destinationFolderId,
+    messageIds: [],
+    headerMessageIds: []
+  };
+  for (const m of headers) {
+    if (!group.messageIds.includes(m.id)) group.messageIds.push(m.id);
+    const headerMessageId = normalizeHeaderMessageId(m.headerMessageId);
+    if (headerMessageId && !group.headerMessageIds.includes(headerMessageId)) {
+      group.headerMessageIds.push(headerMessageId);
+    }
+  }
+  return group;
+}
+
+function mergeMovedGroups(a, b) {
+  if (!a) return b;
+  if (!b) return a;
+  for (const id of b.messageIds) {
+    if (!a.messageIds.includes(id)) a.messageIds.push(id);
+  }
+  for (const headerMessageId of b.headerMessageIds) {
+    if (!a.headerMessageIds.includes(headerMessageId)) a.headerMessageIds.push(headerMessageId);
+  }
+  return a;
+}
+
 async function buildMovedMessageGroup(headerMessageIds, destinationFolderId, destinationMeta) {
   if (!headerMessageIds.length) return null;
 
   const messageIds = [];
   const foundHeaderIds = [];
   const unresolved = new Set(headerMessageIds);
-  for (const delayMs of [0, 250, 750, 1500]) {
+  for (const delayMs of [0, 250, 750, 1500, 2500]) {
     if (delayMs > 0) await new Promise(resolve => setTimeout(resolve, delayMs));
 
     for (const headerMessageId of [...unresolved]) {
@@ -888,18 +948,25 @@ async function moveEmails(senderEmail, recipientAddress, selectedFolders, destin
   if (ids.length === 0) return { moved: 0 };
   const headerMessageIds = getHeaderIdsForFolders(sub.messageGroups, selectedFolders);
 
+  const tracker = startMoveTracking(ids);
   let moved = 0;
   let failed = 0;
+  let tracked;
   const batchSize = 50;
-  for (let i = 0; i < ids.length; i += batchSize) {
-    const batch = ids.slice(i, i + batchSize);
-    try {
-      await browser.messages.move(batch, destinationFolderId);
-      moved += batch.length;
-    } catch (e) {
-      failed += batch.length;
-      console.warn('Failed to move batch:', e);
+  try {
+    for (let i = 0; i < ids.length; i += batchSize) {
+      const batch = ids.slice(i, i + batchSize);
+      try {
+        await browser.messages.move(batch, destinationFolderId);
+        moved += batch.length;
+      } catch (e) {
+        failed += batch.length;
+        console.warn('Failed to move batch:', e);
+      }
     }
+  } finally {
+    // Give late onMoved events a moment to arrive, then stop listening.
+    tracked = await tracker.finish(failed === 0 ? 2000 : 0);
   }
 
   if (failed > 0) {
@@ -907,15 +974,29 @@ async function moveEmails(senderEmail, recipientAddress, selectedFolders, destin
   }
 
   const remainingGroups = removeGroupsForFolders(sub.messageGroups, selectedFolders);
-  const movedGroup = await buildMovedMessageGroup(headerMessageIds, destinationFolderId, destinationMeta);
+  let movedGroup = groupFromMovedHeaders(tracked.movedHeaders, destinationFolderId, destinationMeta);
+
+  // Fall back to querying the destination by Message-ID for anything the
+  // onMoved event did not report (backends that skip the event, or legacy
+  // data without stored header ids).
+  if (tracked.unresolvedCount > 0) {
+    const foundHeaderIds = new Set(movedGroup ? movedGroup.headerMessageIds : []);
+    const missingHeaderIds = headerMessageIds.filter(h => !foundHeaderIds.has(h));
+    if (missingHeaderIds.length > 0) {
+      const fallbackGroup = await buildMovedMessageGroup(missingHeaderIds, destinationFolderId, destinationMeta);
+      movedGroup = mergeMovedGroups(movedGroup, fallbackGroup);
+    }
+  }
+
   sub.messageGroups = movedGroup ? [...remainingGroups, movedGroup] : remainingGroups;
   sub.emailCount = totalMessageCount(sub.messageGroups);
   await saveSubscriptions(subs);
 
+  const resolvedCount = movedGroup ? movedGroup.messageIds.length : 0;
   return {
     moved,
-    resolved: !!movedGroup,
-    resolvedCount: movedGroup ? movedGroup.messageIds.length : 0
+    resolved: resolvedCount >= moved,
+    resolvedCount
   };
 }
 
