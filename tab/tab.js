@@ -716,12 +716,12 @@ function renderFolderNodes(folders, depth) {
       f.type === 'virtual';
     const indent = depth * 16;
     html += `<div class="tree-node" style="padding-left:${indent}px">
-      <label class="tree-folder-label${isMoveTargetDisabled ? ' tree-folder-disabled' : ''}" title="${isMoveTargetDisabled ? 'This folder cannot receive moved messages' : ''}">
+      <label class="tree-folder-label${isMoveTargetDisabled ? ' tree-folder-disabled' : ''}" title="${isMoveTargetDisabled ? 'Messages cannot be moved into this folder, but it can be the parent of a new folder' : ''}">
         ${hasChildren
           ? `<span class="tree-toggle" data-folder-id="${esc(f.id)}">&#9656;</span>`
           : '<span class="tree-spacer"></span>'}
-        <input type="radio" name="dest-folder" value="${esc(f.id)}" data-folder-name="${esc(f.name)}" data-folder-path="${esc(f.path || f.name)}"${isMoveTargetDisabled ? ' disabled' : ''}>
-        <span class="tree-folder-name">${esc(f.name)}${isMoveTargetDisabled ? ' (unavailable)' : ''}</span>
+        <input type="radio" name="dest-folder" value="${esc(f.id)}" data-folder-name="${esc(f.name)}" data-folder-path="${esc(f.path || f.name)}"${isMoveTargetDisabled ? ' data-move-disabled="1"' : ''}>
+        <span class="tree-folder-name">${esc(f.name)}${isMoveTargetDisabled ? ' (cannot receive mail)' : ''}</span>
       </label>
     </div>`;
     if (hasChildren) {
@@ -788,7 +788,7 @@ function getSelectedDestination() {
     folderName,
     folderPath,
     label: accountName ? `${accountName} | ${folderLabel}` : folderLabel,
-    disabled: radio.disabled
+    disabled: radio.dataset.moveDisabled === '1'
   };
 }
 
