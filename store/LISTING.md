@@ -127,7 +127,7 @@ Initial public release.
 • Cleanup actions to delete, move, or mark a sender's messages as Junk
 • Alias-aware grouping by sender and receiving address
 • Optional dry-run mode to preview every action before it runs
-• Reliable move tracking, folder creation, and move-destination validation
+• Keep / dismiss / review-again workflow with a stats dashboard
 
 Compatible with Thunderbird 128 and later.
 ```
