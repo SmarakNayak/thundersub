@@ -692,7 +692,7 @@ function renderFolderTree(tree) {
   const container = document.getElementById('modal-dest-tree');
   let html = '';
   for (const account of tree) {
-    html += `<div class="tree-account">
+    html += `<div class="tree-account" data-root-folder-id="${esc(account.rootFolderId || '')}">
       <div class="tree-account-name">${esc(account.accountName)}</div>
       ${renderFolderNodes(account.folders, 0)}
     </div>`;
@@ -738,14 +738,22 @@ async function createNewFolder() {
   const name = nameInput.value.trim();
   if (!name) return;
 
+  // Parent = the selected folder, or the account root (top-level folder)
+  // when nothing is selected. Only ambiguous with multiple accounts shown.
   const destRadio = document.querySelector('input[name="dest-folder"]:checked');
-  if (!destRadio) {
-    toast('Select a parent folder first', 'info');
-    return;
+  let parentFolderId = destRadio ? destRadio.value : null;
+  if (!parentFolderId) {
+    const accounts = document.querySelectorAll('#modal-dest-tree .tree-account');
+    if (accounts.length === 1 && accounts[0].dataset.rootFolderId) {
+      parentFolderId = accounts[0].dataset.rootFolderId;
+    } else {
+      toast('Select a parent folder first', 'info');
+      return;
+    }
   }
 
   try {
-    const result = await bg('createFolder', { parentFolderId: destRadio.value, folderName: name });
+    const result = await bg('createFolder', { parentFolderId, folderName: name });
     toast(`Created folder "${name}"`, 'success');
     nameInput.value = '';
     document.getElementById('modal-new-folder-form').style.display = 'none';

@@ -1089,7 +1089,12 @@ async function getFolderTree() {
   const tree = [];
 
   for (const account of accounts) {
-    const accountNode = { accountId: account.id, accountName: account.name, folders: [] };
+    const accountNode = {
+      accountId: account.id,
+      accountName: account.name,
+      rootFolderId: account.rootFolder ? account.rootFolder.id : null,
+      folders: []
+    };
 
     async function walkFolders(tbFolders) {
       const result = [];
