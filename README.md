@@ -79,9 +79,8 @@ Want to explore risk-free first? Flip the **Dry Run** toggle and every unsubscri
 ThunderSub requires **Thunderbird 128 or later**.
 
 ### From the Thunderbird add-on store *(recommended)*
-Search for **ThunderSub** in **≡ Menu → Add-ons and Themes**, or install from the
-[addons.thunderbird.net listing](https://addons.thunderbird.net/) once it's live. You'll get
-automatic updates.
+Install from the [ThunderSub listing on addons.thunderbird.net](https://addons.thunderbird.net/en-US/thunderbird/addon/thundersub/),
+or search for **ThunderSub** in **≡ Menu → Add-ons and Themes**. You'll get automatic updates.
 
 ### From source
 ```bash
