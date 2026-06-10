@@ -107,19 +107,55 @@ function isReplyOrForwardSubject(subject) {
 }
 
 // ── Recipient address extraction ─────────────────────────────────────────────
-function parseRecipientAddress(fullMessage) {
+function parseRecipientAddress(fullMessage, accountAddresses = []) {
   const headers = fullMessage.headers || {};
+  const candidates = [];
   for (const header of ['delivered-to', 'x-original-to', 'envelope-to']) {
     const value = headers[header];
     if (!value || !value[0]) continue;
     const parsed = parseFromHeader(value[0].split(',')[0].trim());
-    if (parsed.email) return { address: parsed.email, source: header };
+    if (parsed.email) candidates.push({ address: parsed.email, source: header });
   }
   const to = headers['to'];
   if (to && to[0]) {
     const parsed = parseFromHeader(to[0].split(',')[0].trim());
-    if (parsed.email) return { address: parsed.email, source: 'to' };
+    if (parsed.email) candidates.push({ address: parsed.email, source: 'to' });
   }
+
+  const normalizedAccountAddresses = accountAddresses
+    .filter(Boolean)
+    .map(address => address.toLowerCase());
+  const matchingCandidate = candidates.find(candidate =>
+    normalizedAccountAddresses.includes(candidate.address));
+  if (matchingCandidate) return matchingCandidate;
+
+  const isMailingList = !!(
+    headers['list-id'] ||
+    headers['list-unsubscribe'] ||
+    headers['x-beenthere'] ||
+    (headers['precedence'] || []).some(value => /\b(?:bulk|list)\b/i.test(value))
+  );
+
+  if (isMailingList) {
+    for (const header of ['return-path', 'sender', 'errors-to']) {
+      const values = headers[header] || [];
+      const joined = values.join(',').toLowerCase();
+      const matchingAddress = normalizedAccountAddresses.find(address =>
+        joined.includes(address) || joined.includes(address.replace('@', '=')));
+      if (matchingAddress) {
+        return { address: matchingAddress, source: `${header}-verp` };
+      }
+    }
+
+    // Mailing lists commonly replace every visible recipient header with the
+    // list address. The folder's account identity is then the best indication
+    // of the mailbox that actually received the message.
+    if (normalizedAccountAddresses.length > 0) {
+      return { address: normalizedAccountAddresses[0], source: 'account-identity' };
+    }
+  }
+
+  if (candidates.length > 0) return candidates[0];
   return { address: '', source: 'unknown' };
 }
 
@@ -471,9 +507,13 @@ async function runScan() {
     const allFolders = [];
 
     for (const account of accounts) {
+      const identities = await browser.identities.list(account.id);
+      const accountAddresses = identities
+        .map(identity => identity.email)
+        .filter(Boolean);
       const folders = await collectAllFolders(account);
       for (const f of folders) {
-        allFolders.push({ folder: f, accountName: account.name });
+        allFolders.push({ folder: f, accountName: account.name, accountAddresses });
       }
     }
 
@@ -484,7 +524,7 @@ async function runScan() {
     const subs = {};
 
     for (let i = 0; i < allFolders.length; i++) {
-      const { folder, accountName } = allFolders[i];
+      const { folder, accountName, accountAddresses } = allFolders[i];
       scanState.progress = i + 1;
       scanState.message = `Folder ${i + 1} of ${allFolders.length}: ${accountName} | ${folder.name}`;
 
@@ -533,7 +573,7 @@ async function runScan() {
               const { name, email } = parseFromHeader(m.author);
               if (!email) continue;
 
-              const recipient = parseRecipientAddress(full);
+              const recipient = parseRecipientAddress(full, accountAddresses);
               const recipientAddress = recipient.address;
               const key = `${email}|${recipientAddress}`;
 
