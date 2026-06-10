@@ -1216,11 +1216,6 @@ async function moveEmails(senderEmail, recipientAddress, messageGroups, selected
     return { moved: 0 };
   }
 
-  const selectedGroups = selectGroupsForFolders(messageGroups, selectedFolders);
-  if (selectedGroups.some(group => group.folderId === destinationFolderId)) {
-    throw new Error('The destination folder is also a selected source folder.');
-  }
-
   const { ids, unresolvedHeaderIds } = await resolveCurrentMessageIds(messageGroups, selectedFolders, traceId);
   if (unresolvedHeaderIds.length > 0) {
     console.warn(`[ThunderSub] ${unresolvedHeaderIds.length} message(s) could not be re-resolved before move (moved or removed):`, unresolvedHeaderIds);
