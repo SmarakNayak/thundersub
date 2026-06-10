@@ -26,6 +26,7 @@
   },
   "permissions": [
     "messagesRead",
+    "messagesUpdate",
     "messagesMove",
     "messagesDelete",
     "accountsRead",
