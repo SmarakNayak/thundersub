@@ -21,7 +21,7 @@ let scanState = {
   stopped: false
 };
 const SESSION_ID = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
-const MESSAGE_LOOKUP_CONCURRENCY = 8;
+const MESSAGE_LOOKUP_CONCURRENCY = 16;
 
 // ── Storage helpers ──────────────────────────────────────────────────────────
 let stateWriteQueue = Promise.resolve();
