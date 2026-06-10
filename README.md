@@ -4,6 +4,12 @@
 
 No cloud service. No account. No one reading your mail. Everything runs locally inside Thunderbird.
 
+![ThunderSub dashboard — every subscription across your accounts in one place](store/screenshots/01-dashboard.png)
+
+| Unsubscribe & clean up in one step | Live scan progress | Track what you've left |
+|---|---|---|
+| ![Unsubscribe modal](store/screenshots/02-unsubscribe-modal.png) | ![Scan in progress](store/screenshots/03-scan-progress.png) | ![Unsubscribed view](store/screenshots/04-unsubscribed.png) |
+
 ---
 
 ## Why ThunderSub?

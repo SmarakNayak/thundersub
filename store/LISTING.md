@@ -7,7 +7,7 @@ Copy-paste the text blocks below into the corresponding fields of the submission
 
 ## Submission steps
 
-1. Build the package: `bash build.sh` → `dist/thundersub-1.0.xpi`.
+1. Build the package: `bash build.sh` → `dist/thundersub-<version>.xpi` (version comes from `manifest.json`).
 2. Sign in at <https://addons.thunderbird.net> (create an account if needed), then go to
    **Tools → Developer Hub → Submit a New Add-on**.
 3. Choose **"On this site"** (listed distribution — ATN hosts, signs, and serves updates automatically).
@@ -45,26 +45,26 @@ ATN allows limited HTML (`<b> <i> <em> <strong> <ul> <ol> <li> <blockquote> <cod
 ```html
 <b>Take back your inbox.</b> ThunderSub scans every folder in your Thunderbird accounts, finds every mailing list you've ever been signed up to, and gives you one place to unsubscribe from all of them — and clean up the thousands of emails they left behind.
 
-<b>🔍 Deep detection</b>
+<b>Deep detection</b>
 <ul>
 <li>Reads the standard List-Unsubscribe header (RFC 2369) and supports one-click unsubscribe (RFC 8058).</li>
 <li>Also finds unsubscribe links embedded in email bodies (HTML and plain text) when senders don't play by the rules — while skipping quoted and forwarded content.</li>
 <li>Scans all accounts and folders, skipping Junk, Trash, Sent, Drafts, and Gmail's "All Mail" duplicates. Pause, resume, or stop long scans at any time.</li>
 </ul>
 
-<b>📬 Alias-aware</b>
+<b>Alias-aware</b>
 Subscriptions are grouped by sender <i>and</i> receiving address: if a sender mails both your work address and your personal alias, you'll see both — because both need unsubscribing.
 
-<b>✂️ Four ways out</b>
+<b>Four ways out</b>
 ThunderSub auto-picks the best available method: silent one-click POST, unsubscribe email (opens as a draft for review by default; auto-send is opt-in), or the sender's unsubscribe page in your browser. If a method fails, retry with any other detected one.
 
-<b>🧹 Cleanup included</b>
+<b>Cleanup included</b>
 Delete a sender's entire back catalog (to Trash, never permanently) or move it to any folder — with per-folder control over which copies are touched.
 
-<b>🛟 Dry-run mode</b>
+<b>Dry-run mode</b>
 Flip one toggle and every unsubscribe, delete, and move is simulated and reported without touching anything — explore the whole workflow risk-free, then switch it off when you're ready.
 
-<b>🔒 Private by design</b>
+<b>Private by design</b>
 All data stays in Thunderbird's local storage. No cloud service, no account, no telemetry. The only network requests are the unsubscribe actions you explicitly trigger. A Full Reset wipes everything ThunderSub stored.
 
 Open source: <a href="https://github.com/SmarakNayak/thundersub">github.com/SmarakNayak/thundersub</a>
@@ -117,16 +117,19 @@ They show the real tab UI (unmodified `tab/tab.html`/`tab.css`/`tab.js`) rendere
 demo data (`.example` senders, `alex@example.net` recipient) — regenerate any time with
 `bash store/screenshots/make.sh` (needs chromium or nix).
 
-## Release notes for 1.0
+## Release notes (initial release)
 
 ```
 Initial public release.
+
 • Scan all accounts and folders for subscriptions (List-Unsubscribe headers + embedded links)
-• One-click (RFC 8058), email, and browser unsubscribe methods with retry
+• One-click (RFC 8058), email, and browser unsubscribe methods, with retry via any detected method
 • Alias-aware grouping by sender and receiving address
-• Cleanup: delete to Trash or move emails per source folder
-• Dry-run mode enabled by default
-• Keep / dismiss / review-again workflow with stats dashboard
+• Cleanup: delete emails to Trash or move them to a folder, per source folder
+• Optional dry-run mode to preview every action before it runs
+• Keep / dismiss / review-again workflow with a stats dashboard
+
+Compatible with Thunderbird 128 and later.
 ```
 
 ---
@@ -148,5 +151,5 @@ Permission justifications:
 
 No remote code is loaded or executed. innerHTML is used for UI rendering only, with all dynamic values passed through an HTML-escaping helper (esc() in tab/tab.js). No user data leaves the machine.
 
-Testing tip: click the toolbar button → "Open ThunderSub" → "Scan Emails" against any profile with newsletter mail. Enabling the "Dry Run" toggle in the sidebar makes every action simulated and reported via toasts instead of executed.
+Testing tip: click the toolbar button -> "Open ThunderSub" -> "Scan Emails" against any profile with newsletter mail. Enabling the "Dry Run" toggle in the sidebar makes every action simulated and reported via toasts instead of executed.
 ```
