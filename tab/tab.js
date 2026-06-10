@@ -174,6 +174,25 @@ async function loadStats() {
   } catch (e) { /* ignore */ }
 }
 
+function updateDecisionStats(previousDecision, nextDecision) {
+  if (!previousDecision || previousDecision === nextDecision) return;
+  const ids = {
+    pending: ['stat-pending', 'fb-pending'],
+    keep: ['stat-kept', 'fb-keep'],
+    unsubscribed: ['stat-unsub', 'fb-unsubscribed'],
+    error: ['stat-error', 'fb-error']
+  };
+  const adjust = (decision, amount) => {
+    for (const id of (ids[decision] || [])) {
+      const el = document.getElementById(id);
+      const value = Number.parseInt(el?.textContent || '', 10);
+      if (el && Number.isFinite(value)) el.textContent = Math.max(0, value + amount);
+    }
+  };
+  adjust(previousDecision, -1);
+  adjust(nextDecision, 1);
+}
+
 function formatLastScan(iso) {
   const d = new Date(iso);
   if (isNaN(d)) return '';
@@ -971,11 +990,12 @@ async function doUnsubscribeConfirm() {
       dispose,
       error: errorPayload('unsubscribe', message)
     });
+    updateDecisionStats(sub.decision, 'error');
+    sub.decision = 'error';
     toast(message, 'error');
     confirmBtn.disabled = false;
     confirmBtn.textContent = modalConfirmLabel();
     closeUnsubModal();
-    loadStats();
     showErrorsView();
     return;
   }
@@ -995,6 +1015,8 @@ async function doUnsubscribeConfirm() {
       dispose: null,
       error: outcomeDecision === 'error' ? sub.error : undefined
     });
+    updateDecisionStats(sub.decision, outcomeDecision);
+    sub.decision = outcomeDecision;
     const msg = modalMode === 'cleanup'
       ? `Cleanup failed while ${stage} emails: ${e.message || e}. Use Cleanup to retry.`
       : `Unsubscribed, but ${stage} emails failed: ${e.message || e}. Use Cleanup to retry.`;
@@ -1002,7 +1024,6 @@ async function doUnsubscribeConfirm() {
     confirmBtn.disabled = false;
     confirmBtn.textContent = modalConfirmLabel();
     closeUnsubModal();
-    loadStats();
     loadSubs(currentFilter);
   }
 
@@ -1052,7 +1073,12 @@ async function doUnsubscribeConfirm() {
     });
   } catch (e) {
     toast('Error: ' + (e.message || e), 'error');
+    confirmBtn.disabled = false;
+    confirmBtn.textContent = modalConfirmLabel();
+    return;
   }
+  updateDecisionStats(sub.decision, outcomeDecision);
+  sub.decision = outcomeDecision;
 
   // Cleanup keeps the sub in its current category (e.g. an errored sub stays
   // in Errors), so refresh the list in place rather than removing the card.
@@ -1081,7 +1107,6 @@ async function doUnsubscribeConfirm() {
   }
 
   closeUnsubModal();
-  loadStats();
 }
 
 // ── Keep action ──────────────────────────────────────────────────────────────

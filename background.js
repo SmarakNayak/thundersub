@@ -425,8 +425,9 @@ function getIdsForFolders(groups, selectedFolders) {
 // stable RFC 5322 Message-ID header (headerMessageIds) within each group's folder.
 async function resolveCurrentMessageIds(groups, selectedFolders) {
   const selected = selectGroupsForFolders(groups, selectedFolders);
-  const ids = [];
-  const unresolvedHeaderIds = [];
+  const ids = new Set();
+  const unresolvedHeaderIds = new Set();
+  const queries = [];
 
   for (const g of selected) {
     const headerIds = g.headerMessageIds || [];
@@ -434,28 +435,38 @@ async function resolveCurrentMessageIds(groups, selectedFolders) {
       // Older data without header ids: fall back to stored numeric ids. These are
       // only valid within the same session, but it's the best we can do.
       for (const id of g.messageIds || []) {
-        if (!ids.includes(id)) ids.push(id);
+        ids.add(id);
       }
       continue;
     }
     for (const headerMessageId of headerIds) {
+      queries.push({ folderId: g.folderId, headerMessageId });
+    }
+  }
+
+  // Message-ID lookups are independent. A bounded pool avoids making cleanup
+  // time scale linearly while keeping pressure on Thunderbird's query API low.
+  const workers = Array.from({ length: Math.min(8, queries.length) }, async () => {
+    while (queries.length > 0) {
+      const { folderId, headerMessageId } = queries.pop();
       let found = [];
       try {
-        found = await queryByHeaderMessageId(g.folderId, headerMessageId);
+        found = await queryByHeaderMessageId(folderId, headerMessageId);
       } catch (e) {
         console.warn('[ThunderSub] Failed to resolve message by header id', headerMessageId, e);
       }
       if (found.length === 0) {
-        unresolvedHeaderIds.push(headerMessageId);
+        unresolvedHeaderIds.add(headerMessageId);
         continue;
       }
       for (const m of found) {
-        if (!ids.includes(m.id)) ids.push(m.id);
+        ids.add(m.id);
       }
     }
-  }
+  });
+  await Promise.all(workers);
 
-  return { ids, unresolvedHeaderIds };
+  return { ids: [...ids], unresolvedHeaderIds: [...unresolvedHeaderIds] };
 }
 
 function getHeaderIdsForFolders(groups, selectedFolders) {
