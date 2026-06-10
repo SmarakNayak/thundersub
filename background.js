@@ -427,7 +427,6 @@ async function resolveCurrentMessageIds(groups, selectedFolders) {
   const selected = selectGroupsForFolders(groups, selectedFolders);
   const ids = new Set();
   const unresolvedHeaderIds = new Set();
-  const queries = [];
 
   for (const g of selected) {
     const headerIds = g.headerMessageIds || [];
@@ -440,18 +439,9 @@ async function resolveCurrentMessageIds(groups, selectedFolders) {
       continue;
     }
     for (const headerMessageId of headerIds) {
-      queries.push({ folderId: g.folderId, headerMessageId });
-    }
-  }
-
-  // Message-ID lookups are independent. A bounded pool avoids making cleanup
-  // time scale linearly while keeping pressure on Thunderbird's query API low.
-  const workers = Array.from({ length: Math.min(8, queries.length) }, async () => {
-    while (queries.length > 0) {
-      const { folderId, headerMessageId } = queries.pop();
       let found = [];
       try {
-        found = await queryByHeaderMessageId(folderId, headerMessageId);
+        found = await queryByHeaderMessageId(g.folderId, headerMessageId);
       } catch (e) {
         console.warn('[ThunderSub] Failed to resolve message by header id', headerMessageId, e);
       }
@@ -463,8 +453,7 @@ async function resolveCurrentMessageIds(groups, selectedFolders) {
         ids.add(m.id);
       }
     }
-  });
-  await Promise.all(workers);
+  }
 
   return { ids: [...ids], unresolvedHeaderIds: [...unresolvedHeaderIds] };
 }
