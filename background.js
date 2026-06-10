@@ -20,6 +20,7 @@ let scanState = {
   paused: false,
   stopped: false
 };
+const SESSION_ID = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
 
 // ── Storage helpers ──────────────────────────────────────────────────────────
 let stateWriteQueue = Promise.resolve();
@@ -452,7 +453,7 @@ async function collectAllFolders(account) {
 // ── Message group helpers ────────────────────────────────────────────────────
 //
 // messageGroups is an array of:
-//   { accountName, folderName, folderId, messageIds, headerMessageIds }
+//   { accountName, folderName, folderId, messageIds, headerMessageIds, sessionId }
 //
 // Simple (accountName, folderName) keying for delete/archive scope.
 // Unsub data lives at the top level of each subscription.
@@ -465,10 +466,11 @@ function normalizeHeaderMessageId(value) {
 function addToMessageGroups(groups, accountName, folderName, folderId, msgId, headerMessageId) {
   let group = groups.find(g => g.accountName === accountName && g.folderName === folderName);
   if (!group) {
-    group = { accountName, folderName, folderId, messageIds: [], headerMessageIds: [] };
+    group = { accountName, folderName, folderId, messageIds: [], headerMessageIds: [], sessionId: SESSION_ID };
     groups.push(group);
   }
   if (!group.folderId) group.folderId = folderId;
+  group.sessionId = SESSION_ID;
   group.messageIds.push(msgId);
   if (headerMessageId && !group.headerMessageIds.includes(headerMessageId)) {
     group.headerMessageIds.push(headerMessageId);
@@ -492,17 +494,25 @@ function getIdsForFolders(groups, selectedFolders) {
 // Stored numeric message ids (messages.MessageId) are internal tracking numbers
 // that do NOT survive a Thunderbird restart and do NOT follow a moved message.
 // See: https://webextension-api.thunderbird.net/en/latest/messages.html#messages-messageid
-// So before deleting/moving we re-resolve the *current* numeric ids from the
-// stable RFC 5322 Message-ID header (headerMessageIds) within each group's folder.
+// Numeric ids created in this background session are current. Older ids are
+// re-resolved from stable RFC 5322 Message-ID headers within the group's folder.
 async function resolveCurrentMessageIds(groups, selectedFolders, traceId) {
   const startedAt = Date.now();
   const selected = selectGroupsForFolders(groups, selectedFolders);
   const ids = new Set();
   const unresolvedHeaderIds = new Set();
-  let foldersQueried = 0;
-  let messagesInspected = 0;
+  let sessionGroups = 0;
+  let targetedQueries = 0;
+  let queryMs = 0;
+  let slowestQueryMs = 0;
 
   for (const g of selected) {
+    if (g.sessionId === SESSION_ID) {
+      sessionGroups++;
+      for (const id of g.messageIds || []) ids.add(id);
+      continue;
+    }
+
     const headerIds = new Set((g.headerMessageIds || []).map(normalizeHeaderMessageId).filter(Boolean));
     if (headerIds.size === 0) {
       // Older data without header ids: fall back to stored numeric ids. These are
@@ -513,28 +523,32 @@ async function resolveCurrentMessageIds(groups, selectedFolders, traceId) {
       continue;
     }
 
-    try {
-      const messages = await collectAllQueryResults({ folderId: g.folderId, messagesPerPage: 1000 });
-      foldersQueried++;
-      messagesInspected += messages.length;
-      for (const message of messages) {
-        const headerMessageId = normalizeHeaderMessageId(message.headerMessageId);
-        if (headerIds.has(headerMessageId)) {
-          ids.add(message.id);
-          headerIds.delete(headerMessageId);
-        }
+    for (const headerMessageId of headerIds) {
+      const queryStartedAt = Date.now();
+      let found = [];
+      try {
+        found = await queryByHeaderMessageId(g.folderId, headerMessageId);
+      } catch (e) {
+        console.warn('[ThunderSub] Failed to resolve message by header id', headerMessageId, e);
       }
-    } catch (e) {
-      console.warn('[ThunderSub] Failed to query folder before cleanup; using stored message ids', g.folderId, e);
-      for (const id of g.messageIds || []) ids.add(id);
+      const duration = Date.now() - queryStartedAt;
+      targetedQueries++;
+      queryMs += duration;
+      slowestQueryMs = Math.max(slowestQueryMs, duration);
+      if (found.length === 0) {
+        unresolvedHeaderIds.add(headerMessageId);
+        continue;
+      }
+      for (const message of found) ids.add(message.id);
     }
-    for (const headerMessageId of headerIds) unresolvedHeaderIds.add(headerMessageId);
   }
 
   tracePhase(traceId, 'resolve-message-ids', startedAt, {
     groups: selected.length,
-    foldersQueried,
-    messagesInspected,
+    sessionGroups,
+    targetedQueries,
+    queryMs,
+    slowestQueryMs,
     resolved: ids.size,
     unresolved: unresolvedHeaderIds.size
   });
@@ -622,7 +636,8 @@ function groupFromMovedHeaders(headers, destinationFolderId, destinationMeta) {
     folderName: destinationMeta?.folderName || destinationMeta?.folderPath || 'Moved',
     folderId: destinationFolderId,
     messageIds: [],
-    headerMessageIds: []
+    headerMessageIds: [],
+    sessionId: SESSION_ID
   };
   for (const m of headers) {
     if (!group.messageIds.includes(m.id)) group.messageIds.push(m.id);
@@ -680,7 +695,8 @@ async function buildMovedMessageGroup(headerMessageIds, destinationFolderId, des
     folderName: destinationMeta?.folderName || destinationMeta?.folderPath || 'Moved',
     folderId: destinationFolderId,
     messageIds,
-    headerMessageIds: foundHeaderIds
+    headerMessageIds: foundHeaderIds,
+    sessionId: SESSION_ID
   };
 }
 
