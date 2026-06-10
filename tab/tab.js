@@ -12,7 +12,7 @@ let autoSendUnsubscribeEmails = false;
 let hasScannedBefore = false;
 let scanInProgress = false;
 let currentRecipientFilter = '';
-let currentSort = 'count';
+let currentSort = 'recent';
 const SHOW_DETECTION_UI = false;
 
 // The scan button reads "Rescan Emails" once a scan has produced data, else
@@ -288,10 +288,13 @@ function methodDetail(method) {
 }
 
 function getBestMethod(sub) {
+  if (sub.unsubscribeMethods?.length) return sub.unsubscribeMethods[0];
+
   const urls = sub.unsubUrls || [];
   const httpUrl = urls.find(u => u.startsWith('http')) || '';
   const mailtoUrl = urls.find(u => u.startsWith('mailto')) || '';
-  if (sub.oneClick && httpUrl) return { type: 'oneclick', url: httpUrl };
+  const oneClickUrl = sub.oneClickUrls?.[0] || (sub.oneClick ? httpUrl : '');
+  if (oneClickUrl) return { type: 'oneclick', url: oneClickUrl };
   if (mailtoUrl) return { type: 'mail', url: mailtoUrl };
   if (httpUrl) return { type: 'web', url: httpUrl };
   if (sub.embeddedUrl) return { type: 'embedded', url: sub.embeddedUrl };
@@ -299,19 +302,23 @@ function getBestMethod(sub) {
 }
 
 function getAvailableMethods(sub) {
+  if (sub.unsubscribeMethods?.length) return sub.unsubscribeMethods;
+
   const methods = [];
+  const oneClickUrls = sub.oneClickUrls || [];
   const add = (type, url) => {
     if (url && !methods.some(m => m.type === type && m.url === url)) methods.push({ type, url });
   };
+  for (const url of oneClickUrls) add('oneclick', url);
   for (const url of (sub.unsubUrls || [])) {
     if (url.startsWith('http')) {
-      if (sub.oneClick) add('oneclick', url);
+      if (!oneClickUrls.length && sub.oneClick) add('oneclick', url);
       add('web', url);
     } else if (url.startsWith('mailto:')) {
       add('mail', url);
     }
   }
-  add('embedded', sub.embeddedUrl);
+  for (const url of (sub.embeddedUrls || [sub.embeddedUrl])) add('embedded', url);
   return methods;
 }
 

@@ -309,6 +309,34 @@ function addDetectionEvidence(sub, evidence) {
   sub.detectionEvidence.length = Math.min(sub.detectionEvidence.length, 50);
 }
 
+function newestUniqueUrls(candidates) {
+  const seen = new Set();
+  return candidates
+    .sort((a, b) => String(b.date || '').localeCompare(String(a.date || '')))
+    .map(candidate => candidate.url)
+    .filter(url => {
+      if (!url || seen.has(url)) return false;
+      seen.add(url);
+      return true;
+    });
+}
+
+function newestUniqueMethods(candidates) {
+  const priority = { oneclick: 0, mail: 1, web: 2, embedded: 3 };
+  const seen = new Set();
+  return candidates
+    .sort((a, b) =>
+      String(b.date || '').localeCompare(String(a.date || '')) ||
+      (priority[a.type] ?? 99) - (priority[b.type] ?? 99))
+    .filter(candidate => {
+      const key = `${candidate.type}|${candidate.url}`;
+      if (!candidate.url || seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    })
+    .map(({ type, url }) => ({ type, url }));
+}
+
 // ── Folder collection ────────────────────────────────────────────────────────
 async function collectAllFolders(account) {
   const results = [];
@@ -611,15 +639,11 @@ async function runScan() {
               let urls = [];
               let oneClick = false;
               let embeddedUrl = null;
-              let hasMailto = false;
-              let hasHttp = false;
 
               if (listUnsub && listUnsub.length > 0) {
                 urls = extractUnsubUrls(listUnsub[0]);
                 oneClick = !!(full.headers['list-unsubscribe-post'] &&
                               full.headers['list-unsubscribe-post'].length > 0);
-                hasMailto = urls.some(u => u.startsWith('mailto:'));
-                hasHttp = urls.some(u => u.startsWith('http'));
               }
 
               // Collect embedded links even when header-based methods exist so
@@ -645,11 +669,10 @@ async function runScan() {
                   emailCount: 0,
                   lastDate: '',
                   sampleSubject: '',
-                  unsubUrls: [],
-                  oneClick: false,
-                  hasMailto: false,
-                  hasHttp: false,
-                  embeddedUrl: null,
+                  unsubCandidates: [],
+                  oneClickCandidates: [],
+                  embeddedCandidates: [],
+                  methodCandidates: [],
                   detectionCounts: { header: 0, embedded: 0 },
                   detectionEvidence: [],
                   messageGroups: []
@@ -667,14 +690,21 @@ async function runScan() {
                 s.sampleSubject = m.subject || '';
               }
 
-              // Merge unsub data at top level
+              // Preserve candidate dates so the most recently received methods
+              // are preferred regardless of folder scan order.
               for (const u of urls) {
-                if (!s.unsubUrls.includes(u)) s.unsubUrls.push(u);
+                s.unsubCandidates.push({ url: u, date: dateStr });
+                if (oneClick && u.startsWith('http')) {
+                  s.oneClickCandidates.push({ url: u, date: dateStr });
+                  s.methodCandidates.push({ type: 'oneclick', url: u, date: dateStr });
+                }
+                if (u.startsWith('mailto:')) s.methodCandidates.push({ type: 'mail', url: u, date: dateStr });
+                if (u.startsWith('http')) s.methodCandidates.push({ type: 'web', url: u, date: dateStr });
               }
-              if (oneClick) s.oneClick = true;
-              if (hasMailto) s.hasMailto = true;
-              if (hasHttp) s.hasHttp = true;
-              if (embeddedUrl && !s.embeddedUrl) s.embeddedUrl = embeddedUrl;
+              if (embeddedUrl) {
+                s.embeddedCandidates.push({ url: embeddedUrl, date: dateStr });
+                s.methodCandidates.push({ type: 'embedded', url: embeddedUrl, date: dateStr });
+              }
 
               const headerMessageId = normalizeHeaderMessageId(m.headerMessageId || full.headers['message-id']);
               addDetectionEvidence(s, {
@@ -725,6 +755,19 @@ async function runScan() {
       }
       s._nameFreqs = names;
       delete s.senderNames;
+
+      s.unsubUrls = newestUniqueUrls(s.unsubCandidates);
+      s.oneClickUrls = newestUniqueUrls(s.oneClickCandidates);
+      s.embeddedUrls = newestUniqueUrls(s.embeddedCandidates);
+      s.unsubscribeMethods = newestUniqueMethods(s.methodCandidates);
+      s.oneClick = s.oneClickUrls.length > 0;
+      s.hasMailto = s.unsubUrls.some(u => u.startsWith('mailto:'));
+      s.hasHttp = s.unsubUrls.some(u => u.startsWith('http'));
+      s.embeddedUrl = s.embeddedUrls[0] || null;
+      delete s.unsubCandidates;
+      delete s.oneClickCandidates;
+      delete s.embeddedCandidates;
+      delete s.methodCandidates;
     }
 
     console.log('[ThunderSub] Subscription detection evidence (up to 50 newest messages per sender/recipient):');
@@ -769,11 +812,14 @@ async function runScan() {
         lastDate: s.lastDate,
         sampleSubject: s.sampleSubject,
         unsubUrls: s.unsubUrls,
+        oneClickUrls: s.oneClickUrls,
         oneClick: s.oneClick,
         hasMailto: s.hasMailto,
         hasHttp: s.hasHttp,
         hasEmbedded: !!s.embeddedUrl,
         embeddedUrl: s.embeddedUrl,
+        embeddedUrls: s.embeddedUrls,
+        unsubscribeMethods: s.unsubscribeMethods,
         detectionCounts: s.detectionCounts,
         detectionEvidence: s.detectionEvidence,
         _nameFreqs: s._nameFreqs,
