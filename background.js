@@ -181,6 +181,7 @@ async function fullReset() {
     paused: false,
     stopped: false
   };
+  console.log('[ThunderSub] Full reset completed');
   return { ok: true };
 }
 
@@ -692,7 +693,9 @@ function buildDeferredMovedGroup(headerMessageIds, movedHeaders, destinationFold
 
 // ── Scanner ──────────────────────────────────────────────────────────────────
 async function runScan() {
+  const startedAt = Date.now();
   scanState = { status: 'scanning', progress: 0, total: 0, messagesScanned: 0, sendersFound: 0, message: 'Loading accounts...', done: false };
+  console.log('[ThunderSub] Scan started');
 
   try {
     const accounts = await browser.accounts.list();
@@ -703,7 +706,7 @@ async function runScan() {
       // unsubscribe methods. Reading their full articles can also require a
       // network fetch for every item.
       if (UNSCANNABLE_ACCOUNT_TYPES.has(account.type)) {
-        console.info(`[ThunderSub] Skipping unsupported account type "${account.type}": ${account.name}`);
+        console.log(`[ThunderSub] Skipping unsupported account type "${account.type}": ${account.name}`);
         continue;
       }
 
@@ -719,6 +722,7 @@ async function runScan() {
 
     scanState.total = allFolders.length;
     scanState.message = `Scanning ${allFolders.length} folders...`;
+    console.log(`[ThunderSub] Scanning ${allFolders.length} folders across ${accounts.length} accounts`);
 
     // Accumulate by (senderEmail, recipientAddress) — the atomic subscription unit
     const subs = {};
@@ -729,8 +733,11 @@ async function runScan() {
       scanState.message = `Folder ${i + 1} of ${allFolders.length}: ${accountName} | ${folder.name}`;
 
       if (scanState.stopped) break;
+      console.log(`[ThunderSub] Scanning folder ${i + 1}/${allFolders.length}: ${accountName} | ${folder.name}`);
 
       try {
+        let messageFailures = 0;
+        let firstMessageFailure = null;
         let page = await browser.messages.list(folder.id);
 
         pageLoop:
@@ -839,19 +846,26 @@ async function runScan() {
               addToMessageGroups(s.messageGroups, accountName, folder.name, folder.id, m.id, headerMessageId);
               scanState.sendersFound = Object.keys(subs).length;
             } catch (e) {
-              // Skip individual messages that fail
+              messageFailures++;
+              firstMessageFailure ||= e;
             }
           }
 
           if (page.id) {
             try { page = await browser.messages.continueList(page.id); }
-            catch (e) { break; }
+            catch (e) {
+              console.warn(`[ThunderSub] Failed to continue listing folder: ${accountName} | ${folder.name}`, e);
+              break;
+            }
           } else {
             break;
           }
         }
+        if (messageFailures > 0) {
+          console.warn(`[ThunderSub] Skipped ${messageFailures} unreadable messages in: ${accountName} | ${folder.name}`, firstMessageFailure);
+        }
       } catch (e) {
-        console.warn(`Failed to scan folder ${folder.name}:`, e);
+        console.warn(`[ThunderSub] Failed to scan folder: ${accountName} | ${folder.name}`, e);
       }
     }
 
@@ -863,9 +877,6 @@ async function runScan() {
         if (c > bestCount) { best = n; bestCount = c; }
       }
       s.senderName = best;
-      if (Object.keys(names).length > 1) {
-        console.log(`[NAME] ${s.senderEmail} → picked "${best}" (${bestCount}) from:`, names);
-      }
       s._nameFreqs = names;
       delete s.senderNames;
 
@@ -882,20 +893,6 @@ async function runScan() {
       delete s.embeddedCandidates;
       delete s.methodCandidates;
     }
-
-    console.log('[ThunderSub] Subscription detection evidence (up to 50 newest messages per sender/recipient):');
-    console.table(Object.values(subs).flatMap(s => s.detectionEvidence.map(e => ({
-      sender: s.senderEmail,
-      recipient: s.recipientAddress,
-      subject: e.subject,
-      source: e.sources.join('+'),
-      headerUrls: e.headerUrls.length,
-      embeddedUrl: e.embeddedUrl || '',
-      account: e.accountName,
-      folder: e.folderName,
-      recipientSource: e.recipientSource,
-      contentTypes: e.contentTypes.join(', ')
-    }))));
 
     // Merge with existing stored subscriptions (preserve decisions)
     const {
@@ -984,9 +981,10 @@ async function runScan() {
       paused: false,
       stopped: false
     };
+    console.log(`[ThunderSub] Scan ${wasStopped ? 'stopped' : 'completed'} in ${Math.round((Date.now() - startedAt) / 1000)}s: ${finalSendersFound} subscriptions found`);
 
   } catch (e) {
-    console.error('Scan error:', e);
+    console.error('[ThunderSub] Scan failed:', e);
     scanState = { status: 'idle', progress: 0, total: 0, message: `Error: ${e.message}`, done: false };
   }
 }
@@ -1021,7 +1019,9 @@ async function unsubMail(mailtoUrl, traceId) {
         break;
       }
     }
-  } catch (e) { /* Fall through */ }
+  } catch (e) {
+    console.warn('[ThunderSub] Failed to select an identity for unsubscribe email; using Thunderbird default', e);
+  }
 
   const details = { to, subject, body };
   if (identityId) details.identityId = identityId;
@@ -1316,6 +1316,7 @@ async function setDecision(senderEmail, recipientAddress, decision, dispose, cle
   stateWriteQueue = write.catch(() => {});
   await write;
   tracePhase(traceId, 'persist-decision', startedAt, { decision, dispose: dispose || null });
+  console.log(`[ThunderSub] Decision saved: ${decision}${dispose ? `, cleanup: ${dispose}` : ''}`);
 }
 
 async function getStats() {
@@ -1347,6 +1348,7 @@ async function dismissSubscription(senderEmail, recipientAddress) {
     dismissed: true,
     updatedAt: new Date().toISOString()
   });
+  console.log('[ThunderSub] Subscription dismissed');
 }
 
 // ── Dry-run functions for delete/move (no Thunderbird messages touched) ──────
@@ -1404,7 +1406,9 @@ async function getFolderTree() {
           if (children && children.length > 0) {
             node.subFolders = await walkFolders(children);
           }
-        } catch (e) { /* skip */ }
+        } catch (e) {
+          console.warn(`[ThunderSub] Failed to list move-destination subfolders under: ${f.name}`, e);
+        }
         result.push(node);
       }
       return result;
@@ -1460,14 +1464,14 @@ async function viewSubscription(senderEmail, recipientAddress) {
       text: { text: senderEmail, author: true }
     });
   } catch (e) {
-    // Quick filter may fail on some setups — folder is still displayed
+    console.warn('[ThunderSub] Opened subscription folder but failed to apply sender filter', e);
   }
 
   return { ok: true };
 }
 
 // ── Message handler ──────────────────────────────────────────────────────────
-browser.runtime.onMessage.addListener((request, sender) => {
+function handleRuntimeMessage(request, sender) {
   switch (request.command) {
     case 'scan':
       if (scanState.status !== 'scanning') { runScan(); }
@@ -1479,12 +1483,14 @@ browser.runtime.onMessage.addListener((request, sender) => {
     case 'pauseScan':
       if (scanState.status === 'scanning') {
         scanState.paused = !scanState.paused;
+        console.log(`[ThunderSub] Scan ${scanState.paused ? 'paused' : 'resumed'}`);
       }
       return Promise.resolve({ ok: true, paused: scanState.paused });
 
     case 'stopScan':
       scanState.stopped = true;
       scanState.paused = false;
+      console.log('[ThunderSub] Scan stop requested');
       return Promise.resolve({ ok: true });
 
     case 'cancelOperation':
@@ -1570,6 +1576,15 @@ browser.runtime.onMessage.addListener((request, sender) => {
     default:
       return Promise.resolve({ error: 'Unknown command' });
   }
+}
+
+browser.runtime.onMessage.addListener(async (request, sender) => {
+  try {
+    return await handleRuntimeMessage(request, sender);
+  } catch (e) {
+    console.error(`[ThunderSub] Command failed: ${request.command}`, e);
+    throw e;
+  }
 });
 
-console.log('ThunderSub background script loaded');
+console.log('[ThunderSub] Background script loaded');
