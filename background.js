@@ -22,6 +22,7 @@ let scanState = {
 };
 const SESSION_ID = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
 const cancelledOperations = new Set();
+const UNSCANNABLE_ACCOUNT_TYPES = new Set(['nntp', 'rss']);
 
 // ── Storage helpers ──────────────────────────────────────────────────────────
 let stateWriteQueue = Promise.resolve();
@@ -698,6 +699,14 @@ async function runScan() {
     const allFolders = [];
 
     for (const account of accounts) {
+      // News and feed subscriptions are managed locally and do not have email
+      // unsubscribe methods. Reading their full articles can also require a
+      // network fetch for every item.
+      if (UNSCANNABLE_ACCOUNT_TYPES.has(account.type)) {
+        console.info(`[ThunderSub] Skipping unsupported account type "${account.type}": ${account.name}`);
+        continue;
+      }
+
       const identities = await browser.identities.list(account.id);
       const accountAddresses = identities
         .map(identity => identity.email)

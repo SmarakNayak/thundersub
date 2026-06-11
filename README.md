@@ -1,6 +1,6 @@
 # ⚡ ThunderSub
 
-**Take back your inbox.** ThunderSub scans every folder in your Thunderbird accounts, finds every mailing list you've ever been signed up to, and gives you one place to unsubscribe from all of them — and clean up the thousands of emails they left behind.
+**Take back your inbox.** ThunderSub scans every folder in your Thunderbird mail accounts, finds every mailing list you've ever been signed up to, and gives you one place to unsubscribe from all of them — and clean up the thousands of emails they left behind.
 
 No cloud service. No account. No one reading your mail. Everything runs locally inside Thunderbird.
 
@@ -30,7 +30,7 @@ Services that do this for webmail exist — and they do it by reading your email
 - Reads the standard `List-Unsubscribe` header (RFC 2369) and detects **one-click unsubscribe** support (RFC 8058).
 - Goes further: parses email bodies (HTML *and* plain text) to find **embedded unsubscribe links** when senders don't play by the rules.
 - Smart enough to skip quoted and forwarded content, so a newsletter your friend forwarded you doesn't show up as *your* subscription.
-- Scans every folder across every account — skipping Junk, Trash, Sent, Drafts, and Gmail's "All Mail" duplicates.
+- Scans every folder across your mail accounts — skipping News/NNTP, RSS/Feeds, Junk, Trash, Sent, Drafts, and Gmail's "All Mail" duplicates.
 - Long mailbox? Scans can be **paused, resumed, or stopped** at any time, and partial results are saved.
 
 ### 📬 Alias-aware grouping
