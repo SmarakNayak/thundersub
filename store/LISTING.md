@@ -117,7 +117,7 @@ They show the real tab UI (unmodified `tab/tab.html`/`tab.css`/`tab.js`) rendere
 demo data (`.example` senders, `alex@example.net` recipient) — regenerate any time with
 `bash store/screenshots/make.sh` (needs chromium or nix).
 
-## Release notes (1.0.4)
+## Release notes (1.0.5)
 
 ```
 Initial public release.
@@ -138,7 +138,7 @@ Compatible with Thunderbird 128 and later.
 ## Notes to reviewers (paste into "Notes to Reviewer" on upload)
 
 ```
-Version 1.0.4 supersedes the pending 1.0 through 1.0.3 submissions. Please review 1.0.4 for the initial public release.
+Version 1.0.5 supersedes the pending 1.0 through 1.0.4 submissions. Please review 1.0.5 for the initial public release.
 
 Source is plain, unminified JavaScript with no build step and no third-party libraries — the uploaded XPI is the source (repo: https://github.com/SmarakNayak/thundersub).
 
