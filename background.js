@@ -6,7 +6,7 @@
  * adapted from BetterUnsubscribe by Luc Bennett (MPL-2.0):
  * https://github.com/LucBennett/BetterUnsubscribe */
 
-'use strict';
+import { UNSUB_REGEX } from './unsub-detect.js';
 
 // ── State ────────────────────────────────────────────────────────────────────
 let scanState = {
@@ -262,7 +262,8 @@ function parseRecipientAddress(fullMessage, accountAddresses = []) {
 }
 
 // ── Embedded unsubscribe link detection ──────────────────────────────────────
-const UNSUB_REGEX = /\bun\W?subscri(?:be|bing|ption)\b/i;
+// The localized "unsubscribe" wording (UNSUB_REGEX) is imported from
+// unsub-detect.js so the test suite can exercise the term list directly.
 const URL_REGEX = /https?:\/\/[^\s"'<>]{1,1000}/g;
 const QUOTED_CONTAINER_SELECTOR = [
   'blockquote',
@@ -353,7 +354,7 @@ function findEmbeddedLinkText(part) {
   if (!body) return null;
   const authoredBody = stripQuotedText(body);
 
-  const unsubMatches = [...authoredBody.matchAll(new RegExp(UNSUB_REGEX, 'gi'))];
+  const unsubMatches = [...authoredBody.matchAll(new RegExp(UNSUB_REGEX.source, 'giu'))];
   if (unsubMatches.length === 0) return null;
 
   const urlMatches = [...authoredBody.matchAll(URL_REGEX)];

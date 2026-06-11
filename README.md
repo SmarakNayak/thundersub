@@ -28,7 +28,7 @@ Services that do this for webmail exist — and they do it by reading your email
 
 ### 🔍 Deep subscription detection
 - Reads the standard `List-Unsubscribe` header (RFC 2369) and detects **one-click unsubscribe** support (RFC 8058).
-- Goes further: parses email bodies (HTML *and* plain text) to find **embedded unsubscribe links** when senders don't play by the rules.
+- Goes further: parses email bodies (HTML *and* plain text) to find **embedded unsubscribe links** in 13 languages (English, Dutch, German, French, Spanish, Italian, Portuguese, Polish, Swedish, Danish, Norwegian, Finnish, and Russian) when senders don't play by the rules.
 - Smart enough to skip quoted and forwarded content, so a newsletter your friend forwarded you doesn't show up as *your* subscription.
 - Scans every folder across your mail accounts — skipping News/NNTP, RSS/Feeds, Junk, Trash, Sent, Drafts, and Gmail's "All Mail" duplicates.
 - Long mailbox? Scans can be **paused, resumed, or stopped** at any time, and partial results are saved.
