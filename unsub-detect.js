@@ -30,7 +30,10 @@ export const UNSUB_TERMS_BY_LANG = {
 
   // Dutch — afmelden/afmelding/afmeldlink, split "af te melden",
   // uitschrijven/uitschrijving/uitschrijflink, "uit te schrijven",
-  // "schrijf je/u uit", "meld je/u af", (abonnement) opzeggen. Sources:
+  // "schrijf je/u uit", "meld je/u af", "abonnement/nieuwsbrief opzeggen".
+  // "Opzeggen" needs the subscription context: bare it means cancelling
+  // anything (contracts, insurance), and Dutch footers use afmelden/
+  // uitschrijven for plain mailing lists. Sources:
   //   https://www.seniorweb.nl/artikel/afmelden-voor-reclamemails-en-nieuwsbrieven
   //   https://www.kvk.nl/veilig-zakendoen/durf-je-op-afmelden-te-klikken-in-een-nieuwsbrief/
   //   https://support.google.com/mail/answer/15433283?hl=nl
@@ -41,7 +44,7 @@ export const UNSUB_TERMS_BY_LANG = {
     String.raw`uit\s+te\s+schrijven`,
     String.raw`schrijf\s+(?:je|u)\s+uit`,
     String.raw`meld\s+(?:je|u)\s+af`,
-    String.raw`opzeggen`
+    String.raw`(?:abonnement|nieuwsbrief)\s+opzeggen`
   ],
 
   // German — abmelden/Abmeldung/Abmeldelink, abbestellen/Abbestellung,

@@ -52,6 +52,7 @@ const NEGATIVE = [
   'willingness.unsubscribes.zh.grossen.spacey',   // en: spam hash-buster filler
   'station.secondary.unsubscribers.trout.robust', // en: spam hash-buster filler
   'Aanmelden voor de nieuwsbrief',                // nl: sign up
+  'U kunt uw contract hier opzeggen',             // nl: contract, not a mailing list
   'Anmelden Sie sich jetzt an',                   // de: sign up / login
   'Inscrivez-vous à la newsletter',               // fr: sign up
   'baja temperatura esta semana',                 // es: "baja" unrelated
