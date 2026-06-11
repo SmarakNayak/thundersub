@@ -117,12 +117,12 @@ They show the real tab UI (unmodified `tab/tab.html`/`tab.css`/`tab.js`) rendere
 demo data (`.example` senders, `alex@example.net` recipient) — regenerate any time with
 `bash store/screenshots/make.sh` (needs chromium or nix).
 
-## Release notes (1.0.3)
+## Release notes (1.0.4)
 
 ```
 Initial public release.
 
-• Scan all accounts and folders for subscriptions (List-Unsubscribe headers + embedded links)
+• Scan all accounts and folders for subscriptions (List-Unsubscribe headers + embedded unsubscribe links in 13 languages)
 • One-click (RFC 8058), email, and browser unsubscribe methods, with retry via any detected method
 • Cleanup actions to delete, move, or mark a sender's messages as Junk
 • Alias-aware grouping by sender and receiving address
@@ -138,9 +138,11 @@ Compatible with Thunderbird 128 and later.
 ## Notes to reviewers (paste into "Notes to Reviewer" on upload)
 
 ```
-Version 1.0.3 supersedes the pending 1.0, 1.0.1, and 1.0.2 submissions. Please review 1.0.3 for the initial public release.
+Version 1.0.4 supersedes the pending 1.0 through 1.0.3 submissions. Please review 1.0.4 for the initial public release.
 
 Source is plain, unminified JavaScript with no build step and no third-party libraries — the uploaded XPI is the source (repo: https://github.com/SmarakNayak/thundersub).
+
+The background runs as an ES module via a background page (background.html): background.js imports the localized unsubscribe-wording list from unsub-detect.js, which detects embedded unsubscribe links in 13 languages. All matching is local regex matching; no translation service or network involvement.
 
 License: MPL-2.0. Portions of the unsubscribe detection and unsubscribe methods in background.js are adapted from BetterUnsubscribe by Luc Bennett (MPL-2.0, https://github.com/LucBennett/BetterUnsubscribe), with attribution in the file header and README. ThunderSub is an independent add-on with a different scope (whole-mailbox scanning, review queue, cleanup).
 
