@@ -21,6 +21,7 @@
   <div class="scan-section">
     <h3>Scanner</h3>
     <button id="scan-btn">Scan Emails</button>
+    <button id="scan-scope-btn" class="scan-scope-btn" title="Choose which accounts, folders, and senders are scanned">Scan scope: all folders</button>
     <div class="scan-last" id="scan-last"></div>
     <div class="scan-controls" id="scan-controls">
       <button id="pause-btn">Pause</button>
@@ -146,6 +147,21 @@
     <div class="modal-footer">
       <button id="modal-cancel" class="btn btn-muted">Cancel</button>
       <button id="modal-confirm" class="btn btn-danger">Unsubscribe</button>
+    </div>
+  </div>
+</div>
+
+<div id="scope-modal-overlay" class="modal-overlay">
+  <div class="modal">
+    <h3>Scan Scope</h3>
+    <h4>Accounts &amp; folders</h4>
+    <div id="scope-tree" class="folder-tree scope-tree"></div>
+    <h4 class="scope-senders-title">Skip senders</h4>
+    <textarea id="scope-skip-senders" class="skip-senders-input" rows="4" spellcheck="false" placeholder="phish@spammer1.com&#10;spammer2.com&#10;*@spammer3.com&#10;*@*.spammer4.com"></textarea>
+    <div class="scope-hint">One per line — phish@spammer.com (exact sender), spammer.com (domain + subdomains), *@spammer.com (domain only), *@*.spammer.com (subdomains only).</div>
+    <div class="modal-footer">
+      <button id="scope-cancel" class="btn btn-muted">Cancel</button>
+      <button id="scope-save" class="btn btn-accent">Save</button>
     </div>
   </div>
 </div>

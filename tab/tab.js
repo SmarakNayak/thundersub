@@ -1371,6 +1371,175 @@ function setFilter(filter, btn) {
   loadSubs(filter);
 }
 
+// ── Scan scope ───────────────────────────────────────────────────────────────
+
+function accountTypeLabel(type) {
+  return { rss: 'RSS', nntp: 'News' }[type] || type;
+}
+
+async function openScanScopeModal() {
+  document.getElementById('scope-modal-overlay').classList.add('open');
+  const treeEl = document.getElementById('scope-tree');
+  treeEl.innerHTML = '<div style="padding:8px;color:var(--muted);font-size:12px">Loading folders...</div>';
+  let scope;
+  try {
+    scope = await bg('getScanScope');
+  } catch (e) {
+    treeEl.innerHTML = '<div style="padding:8px;color:var(--danger);font-size:12px">Failed to load folders.</div>';
+    return;
+  }
+  renderScopeTree(scope);
+  document.getElementById('scope-skip-senders').value = (scope.skipSenders || []).join('\n');
+}
+
+function closeScanScopeModal() {
+  document.getElementById('scope-modal-overlay').classList.remove('open');
+}
+
+function renderScopeTree(scope) {
+  const excludedAccounts = new Set(scope.excludedAccountIds || []);
+  const excludedFolders = new Set(scope.excludedFolderIds || []);
+  let html = '';
+  for (const account of scope.accounts || []) {
+    if (!account.scannable) {
+      html += `<div class="tree-account">
+        <label class="tree-account-label tree-account-disabled" title="${esc(accountTypeLabel(account.type))} accounts have no email subscriptions to scan">
+          <input type="checkbox" disabled>
+          <span class="tree-account-name">${esc(account.accountName)} (${esc(accountTypeLabel(account.type))} — can't be scanned)</span>
+        </label>
+      </div>`;
+      continue;
+    }
+    const accountExcluded = excludedAccounts.has(account.accountId);
+    html += `<div class="tree-account" data-account-id="${esc(account.accountId)}">
+      <label class="tree-account-label">
+        <input type="checkbox" class="scope-account-check"${accountExcluded ? '' : ' checked'}>
+        <span class="tree-account-name">${esc(account.accountName)}</span>
+      </label>
+      ${renderScopeFolderNodes(account.folders, 0, accountExcluded, excludedFolders)}
+    </div>`;
+  }
+  document.getElementById('scope-tree').innerHTML = html;
+  for (const accountEl of document.querySelectorAll('#scope-tree .tree-account[data-account-id]')) {
+    syncScopeAccountState(accountEl);
+  }
+}
+
+function renderScopeFolderNodes(folders, depth, parentExcluded, excludedFolders) {
+  let html = '';
+  for (const f of folders || []) {
+    const hasChildren = f.subFolders && f.subFolders.length > 0;
+    const checked = !parentExcluded && !excludedFolders.has(f.id);
+    html += `<div class="tree-node" style="padding-left:${depth * 16}px">
+      <label class="tree-folder-label">
+        ${hasChildren
+          ? `<span class="tree-toggle" data-folder-id="${esc(f.id)}">&#9656;</span>`
+          : '<span class="tree-spacer"></span>'}
+        <input type="checkbox" class="scope-folder-check" value="${esc(f.id)}"${checked ? ' checked' : ''}>
+        <span class="tree-folder-name">${esc(f.name)}</span>
+      </label>
+    </div>`;
+    if (hasChildren) {
+      html += `<div class="tree-subtree" data-parent-id="${esc(f.id)}" style="display:none">
+        ${renderScopeFolderNodes(f.subFolders, depth + 1, parentExcluded, excludedFolders)}
+      </div>`;
+    }
+  }
+  return html;
+}
+
+function syncScopeAccountState(accountEl) {
+  const accountCheck = accountEl.querySelector('.scope-account-check');
+  const folderChecks = [...accountEl.querySelectorAll('.scope-folder-check')];
+  if (!accountCheck || folderChecks.length === 0) return;
+  const checkedCount = folderChecks.filter(cb => cb.checked).length;
+  accountCheck.checked = checkedCount > 0;
+  accountCheck.indeterminate = checkedCount > 0 && checkedCount < folderChecks.length;
+}
+
+function onScopeTreeChange(e) {
+  const target = e.target;
+  if (target.classList.contains('scope-account-check')) {
+    target.indeterminate = false;
+    for (const cb of target.closest('.tree-account').querySelectorAll('.scope-folder-check')) {
+      cb.checked = target.checked;
+    }
+  } else if (target.classList.contains('scope-folder-check')) {
+    // Cascade to subfolders, then recompute the account tri-state.
+    const subtree = target.closest('.tree-node').nextElementSibling;
+    if (subtree && subtree.classList.contains('tree-subtree')) {
+      for (const cb of subtree.querySelectorAll('.scope-folder-check')) {
+        cb.checked = target.checked;
+      }
+    }
+    syncScopeAccountState(target.closest('.tree-account'));
+  }
+}
+
+// Must stay in sync with SENDER_PATTERN_REGEX in scan-scope.js (this file is
+// not a module, so it cannot import it).
+const SCOPE_SENDER_PATTERN = /^((\*|[^\s@*]*)@[^\s@*]+|\*?@\*\.[^\s@*]+|[^\s@*]+\.[^\s@*]+)$/;
+
+async function saveScanScope() {
+  const excludedAccountIds = [];
+  const excludedFolderIds = [];
+  for (const accountEl of document.querySelectorAll('#scope-tree .tree-account[data-account-id]')) {
+    const folderChecks = [...accountEl.querySelectorAll('.scope-folder-check')];
+    const unchecked = folderChecks.filter(cb => !cb.checked);
+    const accountChecked = accountEl.querySelector('.scope-account-check').checked;
+    if ((folderChecks.length > 0 && unchecked.length === folderChecks.length) ||
+        (folderChecks.length === 0 && !accountChecked)) {
+      excludedAccountIds.push(accountEl.dataset.accountId);
+    } else {
+      excludedFolderIds.push(...unchecked.map(cb => cb.value));
+    }
+  }
+
+  const skipSenders = document.getElementById('scope-skip-senders').value
+    .split('\n').map(line => line.trim()).filter(Boolean);
+  const invalid = skipSenders.find(p => !SCOPE_SENDER_PATTERN.test(p));
+  if (invalid) {
+    toast(`Invalid sender pattern "${invalid}" — use name@domain.com, domain.com, *@domain.com, or *@*.domain.com`, 'error');
+    return;
+  }
+
+  try {
+    await bg('setScanScope', { excludedAccountIds, excludedFolderIds, skipSenders });
+    closeScanScopeModal();
+    toast('Scan scope saved', 'success');
+    refreshScanScopeLabel();
+  } catch (e) {
+    toast('Failed to save scan scope: ' + (e.message || e), 'error');
+  }
+}
+
+async function refreshScanScopeLabel() {
+  const btn = document.getElementById('scan-scope-btn');
+  try {
+    const scope = await bg('getScanScope');
+    const excludedAccounts = new Set(scope.excludedAccountIds || []);
+    const excludedFolders = new Set(scope.excludedFolderIds || []);
+    let total = 0;
+    let excluded = 0;
+    const countFolders = (folders, accountExcluded) => {
+      for (const f of folders || []) {
+        total++;
+        if (accountExcluded || excludedFolders.has(f.id)) excluded++;
+        countFolders(f.subFolders, accountExcluded);
+      }
+    };
+    for (const account of scope.accounts || []) {
+      if (!account.scannable) continue;
+      countFolders(account.folders, excludedAccounts.has(account.accountId));
+    }
+    const skipped = (scope.skipSenders || []).length;
+    const parts = [excluded > 0 ? `${total - excluded}/${total} folders` : 'all folders'];
+    if (skipped > 0) parts.push(`${skipped} sender${skipped === 1 ? '' : 's'} skipped`);
+    btn.textContent = `Scan scope: ${parts.join(' · ')}`;
+    btn.title = btn.textContent;
+  } catch (e) { /* keep the default label */ }
+}
+
 // ── Scan ─────────────────────────────────────────────────────────────────────
 async function startScan() {
   const btn = document.getElementById('scan-btn');
@@ -1467,6 +1636,28 @@ function pollScanStatus() {
 // ── Init ─────────────────────────────────────────────────────────────────────
 document.addEventListener('DOMContentLoaded', async () => {
   document.getElementById('scan-btn').addEventListener('click', startScan);
+
+  // Scan scope modal
+  document.getElementById('scan-scope-btn').addEventListener('click', openScanScopeModal);
+  document.getElementById('scope-cancel').addEventListener('click', closeScanScopeModal);
+  document.getElementById('scope-save').addEventListener('click', saveScanScope);
+  document.getElementById('scope-modal-overlay').addEventListener('click', (e) => {
+    if (e.target.id === 'scope-modal-overlay') closeScanScopeModal();
+  });
+  document.getElementById('scope-tree').addEventListener('change', onScopeTreeChange);
+  document.getElementById('scope-tree').addEventListener('click', (e) => {
+    const toggle = e.target.closest('.tree-toggle');
+    if (!toggle) return;
+    // The toggle sits inside the checkbox label: stop the click from
+    // flipping the checkbox while expanding/collapsing.
+    e.preventDefault();
+    const subtree = document.querySelector(`#scope-tree .tree-subtree[data-parent-id="${CSS.escape(toggle.dataset.folderId)}"]`);
+    if (!subtree) return;
+    const open = subtree.style.display !== 'none';
+    subtree.style.display = open ? 'none' : 'block';
+    toggle.innerHTML = open ? '&#9656;' : '&#9662;';
+  });
+  refreshScanScopeLabel();
   document.getElementById('dry-run-toggle').addEventListener('change', (e) => {
     updateDryRun(e.target.checked);
   });

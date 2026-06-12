@@ -7,6 +7,7 @@
  * https://github.com/LucBennett/BetterUnsubscribe */
 
 import { UNSUB_REGEX, mayContainUnsubWording } from './unsub-detect.js';
+import { buildSenderSkipMatcher } from './scan-scope.js';
 
 // ── State ────────────────────────────────────────────────────────────────────
 let scanState = {
@@ -453,14 +454,19 @@ function newestUniqueMethods(candidates) {
 }
 
 // ── Folder collection ────────────────────────────────────────────────────────
+const SCAN_EXCLUDED_FOLDER_TYPES = new Set(['junk', 'trash', 'sent', 'drafts', 'outbox', 'templates']);
+
+function isScannableFolder(folder) {
+  if (SCAN_EXCLUDED_FOLDER_TYPES.has(folder.type)) return false;
+  return folder.name !== 'All Mail' && folder.name !== '[Gmail]/All Mail';
+}
+
 async function collectAllFolders(account) {
   const results = [];
-  const excludedFolderTypes = new Set(['junk', 'trash', 'sent', 'drafts', 'outbox', 'templates']);
 
   async function walk(folders) {
     for (const folder of folders) {
-      if (excludedFolderTypes.has(folder.type)) continue;
-      if (folder.name === 'All Mail' || folder.name === '[Gmail]/All Mail') continue;
+      if (!isScannableFolder(folder)) continue;
       results.push(folder);
       try {
         const subFolders = await browser.folders.getSubFolders(folder.id, false);
@@ -475,6 +481,74 @@ async function collectAllFolders(account) {
     await walk(account.folders);
   }
   return results;
+}
+
+// ── Scan scope ───────────────────────────────────────────────────────────────
+//
+// Folder exclusions are stored as ids — accounts excluded wholesale plus
+// individually unchecked folders — so newly created accounts and folders are
+// scanned by default. Sender skip patterns are exact addresses or *@domain
+// (see scan-scope.js).
+
+async function getScanScopeSettings() {
+  const result = await browser.storage.local.get(['scanExcludedAccountIds', 'scanExcludedFolderIds', 'scanSkipSenders']);
+  return {
+    excludedAccountIds: result.scanExcludedAccountIds || [],
+    excludedFolderIds: result.scanExcludedFolderIds || [],
+    skipSenders: result.scanSkipSenders || []
+  };
+}
+
+function normalizeStringList(values) {
+  return [...new Set((Array.isArray(values) ? values : [])
+    .map(v => String(v || '').trim())
+    .filter(Boolean))];
+}
+
+async function setScanScope({ excludedAccountIds, excludedFolderIds, skipSenders }) {
+  await browser.storage.local.set({
+    scanExcludedAccountIds: normalizeStringList(excludedAccountIds),
+    scanExcludedFolderIds: normalizeStringList(excludedFolderIds),
+    scanSkipSenders: normalizeStringList(skipSenders).map(p => p.toLowerCase())
+  });
+  return { ok: true };
+}
+
+// The full account/folder tree as the scanner sees it (same folder
+// exclusions), with unscannable account types flagged for the UI.
+async function getScanScope() {
+  const accounts = await browser.accounts.list();
+  const tree = [];
+  for (const account of accounts) {
+    const node = {
+      accountId: account.id,
+      accountName: account.name,
+      type: account.type,
+      scannable: !UNSCANNABLE_ACCOUNT_TYPES.has(account.type),
+      folders: []
+    };
+    if (node.scannable && account.folders && account.folders.length > 0) {
+      node.folders = await walkScanScopeFolders(account.folders);
+    }
+    tree.push(node);
+  }
+  return { accounts: tree, ...(await getScanScopeSettings()) };
+}
+
+async function walkScanScopeFolders(folders) {
+  const result = [];
+  for (const folder of folders) {
+    if (!isScannableFolder(folder)) continue;
+    const node = { id: folder.id, name: folder.name, subFolders: [] };
+    try {
+      const children = await browser.folders.getSubFolders(folder.id, false);
+      if (children && children.length > 0) {
+        node.subFolders = await walkScanScopeFolders(children);
+      }
+    } catch (e) { /* Some folders may not support subfolders */ }
+    result.push(node);
+  }
+  return result;
 }
 
 // ── Message group helpers ────────────────────────────────────────────────────
@@ -724,6 +798,14 @@ async function runScan() {
   console.log('[ThunderSub] Scan started');
 
   try {
+    const { excludedAccountIds, excludedFolderIds, skipSenders } = await getScanScopeSettings();
+    const excludedAccounts = new Set(excludedAccountIds);
+    const excludedFolders = new Set(excludedFolderIds);
+    const skipsSender = buildSenderSkipMatcher(skipSenders);
+    if (excludedAccounts.size > 0 || excludedFolders.size > 0 || skipSenders.length > 0) {
+      console.log(`[ThunderSub] Scan scope: excluding ${excludedAccounts.size} account(s) and ${excludedFolders.size} folder(s), skipping ${skipSenders.length} sender pattern(s)`);
+    }
+
     const accounts = await browser.accounts.list();
     const allFolders = [];
 
@@ -735,6 +817,10 @@ async function runScan() {
         console.log(`[ThunderSub] Skipping unsupported account type "${account.type}": ${account.name}`);
         continue;
       }
+      if (excludedAccounts.has(account.id)) {
+        console.log(`[ThunderSub] Skipping account excluded from scan scope: ${account.name}`);
+        continue;
+      }
 
       const identities = await browser.identities.list(account.id);
       const accountAddresses = identities
@@ -742,6 +828,7 @@ async function runScan() {
         .filter(Boolean);
       const folders = await collectAllFolders(account);
       for (const f of folders) {
+        if (excludedFolders.has(f.id)) continue;
         let messageCount = 0;
         try {
           const info = await browser.folders.getFolderInfo(f.id);
@@ -793,6 +880,10 @@ async function runScan() {
               // belonging to quoted/nested messages, not the outer sender.
               if (isReplyOrForwardSubject(m.subject)) continue;
 
+              // Skip-listed senders are filtered before the body fetch.
+              const { name, email } = parseFromHeader(m.author);
+              if (skipsSender && email && skipsSender(email)) continue;
+
               const full = await withTimeout(
                 browser.messages.getFull(m.id), MESSAGE_FETCH_TIMEOUT_MS, `getFull(${m.id})`);
               if (!full || !full.headers) continue;
@@ -815,7 +906,6 @@ async function runScan() {
 
               scanState.subscriptionEmailsFound++;
 
-              const { name, email } = parseFromHeader(m.author);
               if (!email) continue;
 
               const recipient = parseRecipientAddress(full, accountAddresses);
@@ -1589,6 +1679,12 @@ function handleRuntimeMessage(request, sender) {
     case 'moveEmails':
       return getDryRun().then(dryRun => (dryRun ? dryRunMoveEmails : moveEmails)(
         request.senderEmail, request.recipientAddress, request.messageGroups, request.selectedFolders, request.destinationFolderId, request.destination, request.traceId));
+
+    case 'getScanScope':
+      return getScanScope();
+
+    case 'setScanScope':
+      return setScanScope(request);
 
     case 'getFolderTree':
       return getFolderTree();
