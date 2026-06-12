@@ -119,21 +119,13 @@ They show the real tab UI (unmodified `tab/tab.html`/`tab.css`/`tab.js`) rendere
 demo data (`.example` senders, `alex@example.net` recipient) — regenerate any time with
 `bash store/screenshots/make.sh` (needs chromium or nix).
 
-## Release notes (1.0.9)
+## Release notes (1.0.10)
 
 ```
-Initial public release.
+Transparency and installation update.
 
-• Scan all accounts and folders for subscriptions (List-Unsubscribe headers + embedded unsubscribe links in 13 languages)
-• Scan scope controls: choose which accounts and folders are scanned, and skip senders or whole domains
-• One-click (RFC 8058), email, and browser unsubscribe methods, with retry via any detected method
-• Cleanup actions to delete, move, or mark a sender's messages as Junk
-• Alias-aware grouping by sender and receiving address
-• Hardened against malicious senders: suspicious unsubscribe links are blocked before opening, one-click endpoints must use public HTTPS, email content is never rendered as HTML, and a warning appears before unsubscribing from senders without the standard unsubscribe header
-• Safe defaults: existing emails are kept on unsubscribe unless you choose otherwise
-• Optional dry-run mode to preview every action before it runs
-• Keep / dismiss / review-again workflow with a stats dashboard
-• Live message-level progress with pause and cancellation for scans and cleanup operations
+• Unsubscribe dialogs now display the selected method and full destination before an unsubscribe request is sent or a link is opened
+• Added clearer instructions for installing ThunderSub from the source repository while Thunderbird Add-ons review is pending
 
 Compatible with Thunderbird 128 and later.
 ```
@@ -143,7 +135,7 @@ Compatible with Thunderbird 128 and later.
 ## Notes to reviewers (paste into "Notes to Reviewer" on upload)
 
 ```
-Version 1.0.9 supersedes the pending 1.0 through 1.0.8 submissions. Please review 1.0.9 for the initial public release.
+Version 1.0.10 supersedes the pending 1.0 through 1.0.9 submissions. Please review 1.0.10 for the initial public release.
 
 Source is plain, unminified JavaScript with no build step and no third-party libraries — the uploaded XPI is the source (repo: https://github.com/SmarakNayak/thundersub).
 
