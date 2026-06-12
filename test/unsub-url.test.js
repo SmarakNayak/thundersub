@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { oneClickUrlBlockReason } from '../unsub-url.js';
+import { oneClickUrlBlockReason, browserUrlBlockReason } from '../unsub-url.js';
 
 const ok = (url) => assert.equal(oneClickUrlBlockReason(url), null, `expected allowed: ${url}`);
 const blocked = (url) => assert.ok(oneClickUrlBlockReason(url), `expected blocked: ${url}`);
@@ -46,6 +46,19 @@ test('rejects obfuscated IPv4 notations via URL canonicalization', () => {
   blocked('https://2130706433/u');          // decimal 127.0.0.1
   blocked('https://0x7f000001/u');          // hex 127.0.0.1
   blocked('https://0177.0.0.1/u');          // octal first byte
+});
+
+test('browser methods allow http but still block non-http and local hosts', () => {
+  // http is allowed for browser-opened links (unlike the one-click POST)...
+  assert.equal(browserUrlBlockReason('http://unsubscribe.example.com/u'), null);
+  assert.equal(browserUrlBlockReason('https://unsubscribe.example.com/u'), null);
+  assert.ok(oneClickUrlBlockReason('http://unsubscribe.example.com/u'), 'one-click still rejects http');
+  // ...but other schemes and internal destinations are still refused.
+  for (const bad of ['javascript:alert(1)', 'file:///etc/passwd', 'data:text/html,x',
+                     'http://localhost/u', 'http://192.168.1.1/reboot', 'http://router/u',
+                     'http://[::1]/u', 'ftp://example.com/u']) {
+    assert.ok(browserUrlBlockReason(bad), `expected blocked: ${bad}`);
+  }
 });
 
 test('rejects local IPv6 literals', () => {

@@ -33,11 +33,20 @@ function refreshScanButtonLabel() {
 // (boolean true sets an empty attribute, false/null omits it), and
 // event-handler attributes are rejected — listeners are attached with
 // addEventListener only.
+const URL_ATTRS = new Set(['href', 'src', 'xlink:href', 'action', 'formaction', 'poster', 'background']);
+const UNSAFE_URL_SCHEME = /^\s*(?:javascript|data|vbscript):/i;
+
 function el(tag, attrs = {}, ...children) {
   const node = document.createElement(tag);
   for (const [name, value] of Object.entries(attrs)) {
     if (value == null || value === false) continue;
     if (/^on/i.test(name)) throw new Error(`Refusing event-handler attribute: ${name}`);
+    // No URL-bearing attribute in this UI carries untrusted data today, but
+    // guard the scheme so a future href/src built from email content can't
+    // smuggle javascript:/data: past the no-innerHTML rule.
+    if (URL_ATTRS.has(name.toLowerCase()) && UNSAFE_URL_SCHEME.test(String(value))) {
+      throw new Error(`Refusing unsafe ${name} value: ${value}`);
+    }
     node.setAttribute(name, value === true ? '' : String(value));
   }
   node.append(...children.flat(Infinity).filter(c => c !== null && c !== undefined && c !== false));

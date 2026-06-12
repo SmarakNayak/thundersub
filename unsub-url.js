@@ -24,16 +24,24 @@ const PRIVATE_IPV4 = [
   /^192\.168\./                                 // RFC 1918
 ];
 
-// Returns a human-readable reason the URL must not receive an automatic
-// POST, or null when it looks like a public https endpoint.
-export function oneClickUrlBlockReason(rawUrl) {
+// Shared gate. `allowHttp` lets the browser-opened methods accept http://
+// (some senders still link plain http unsubscribe pages); the one-click
+// POST stays https-only per RFC 8058. The host checks are identical for
+// both: opening http://192.168.1.1/… in a browser can still trigger a
+// CSRF-style GET against a LAN device, and a legitimate mailing list never
+// hosts its unsubscribe page on localhost or a private address.
+function urlBlockReason(rawUrl, { allowHttp }) {
   let url;
   try {
     url = new URL(rawUrl);
   } catch (e) {
     return 'not a valid URL';
   }
-  if (url.protocol !== 'https:') return 'one-click unsubscribe requires an https:// URL (RFC 8058)';
+  if (url.protocol !== 'https:' && !(allowHttp && url.protocol === 'http:')) {
+    return allowHttp
+      ? 'unsubscribe links must use http(s)'
+      : 'one-click unsubscribe requires an https:// URL (RFC 8058)';
+  }
 
   let host = url.hostname.toLowerCase();
   if (host.endsWith('.')) host = host.slice(0, -1);
@@ -56,4 +64,15 @@ export function oneClickUrlBlockReason(rawUrl) {
   if (!host.includes('.')) return 'single-label (intranet) hostname';
   if (/\.(local|internal|home\.arpa)$/.test(host)) return 'internal-network hostname';
   return null;
+}
+
+// One-click POST: https only, public host.
+export function oneClickUrlBlockReason(rawUrl) {
+  return urlBlockReason(rawUrl, { allowHttp: false });
+}
+
+// Web / embedded-link methods opened in the default browser: http or https,
+// still refusing localhost/private/internal destinations.
+export function browserUrlBlockReason(rawUrl) {
+  return urlBlockReason(rawUrl, { allowHttp: true });
 }

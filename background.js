@@ -8,7 +8,8 @@
 
 import { UNSUB_REGEX, mayContainUnsubWording } from './unsub-detect.js';
 import { buildSenderSkipMatcher } from './scan-scope.js';
-import { oneClickUrlBlockReason } from './unsub-url.js';
+import { oneClickUrlBlockReason, browserUrlBlockReason } from './unsub-url.js';
+import { junkFolderForGroup } from './junk-routing.js';
 
 // ── State ────────────────────────────────────────────────────────────────────
 let scanState = {
@@ -1214,18 +1215,24 @@ async function unsubMail(mailtoUrl, recipientAddress, traceId) {
   return { ok: true, to, sent: true };
 }
 
-async function unsubWeb(url, traceId) {
+async function openUnsubInBrowser(url, phase, traceId) {
   const startedAt = Date.now();
+  const blockReason = browserUrlBlockReason(url);
+  if (blockReason) {
+    tracePhase(traceId, `${phase}-blocked`, startedAt, { reason: blockReason });
+    throw new Error(`Blocked unsafe unsubscribe link (${blockReason}).`);
+  }
   await browser.windows.openDefaultBrowser(url);
-  tracePhase(traceId, 'open-browser', startedAt);
+  tracePhase(traceId, phase, startedAt);
   return { ok: true };
 }
 
+async function unsubWeb(url, traceId) {
+  return openUnsubInBrowser(url, 'open-browser', traceId);
+}
+
 async function unsubEmbedded(url, traceId) {
-  const startedAt = Date.now();
-  await browser.windows.openDefaultBrowser(url);
-  tracePhase(traceId, 'open-embedded-browser', startedAt);
-  return { ok: true };
+  return openUnsubInBrowser(url, 'open-embedded-browser', traceId);
 }
 
 function dryRunUnsubscribe(type, url) {
@@ -1297,10 +1304,12 @@ async function junkEmails(senderEmail, recipientAddress, messageGroups) {
     return { junked: 0, movedToSpam: 0, deleted: 0 };
   }
 
+  // Key junk folders by account id, not display name: two accounts can
+  // share a name, which would route a junk move into the wrong mailbox.
   const accounts = await browser.accounts.list();
-  const junkFolderByAccountName = {};
+  const junkFolderByAccountId = {};
   for (const account of accounts) {
-    junkFolderByAccountName[account.name] = await findJunkFolderId(account);
+    junkFolderByAccountId[account.id] = await findJunkFolderId(account);
   }
 
   let junked = 0;
@@ -1326,7 +1335,8 @@ async function junkEmails(senderEmail, recipientAddress, messageGroups) {
       }
     }
 
-    const junkFolderId = junkFolderByAccountName[group.accountName];
+    const junkFolderId = await junkFolderForGroup(
+      group, accounts, junkFolderByAccountId, folderId => browser.folders.get(folderId));
     if (junkFolderId) {
       const { moved, failed } = await moveMessages(ids, junkFolderId);
       movedToSpam += moved;

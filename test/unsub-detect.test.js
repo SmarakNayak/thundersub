@@ -150,7 +150,8 @@ test('manifest uses the module-loading background page', () => {
 
 test('build.sh bundles the background page and modules into the xpi', () => {
   const build = fs.readFileSync(repoFile('build.sh'), 'utf8');
-  for (const f of ['background.html', 'unsub-detect.js', 'scan-scope.js', 'unsub-url.js', 'background.js']) {
+  for (const f of ['background.html', 'unsub-detect.js', 'scan-scope.js', 'unsub-url.js',
+                   'junk-routing.js', 'background.js']) {
     assert.ok(build.includes(f), `${f} missing from build.sh zip list`);
   }
 });
