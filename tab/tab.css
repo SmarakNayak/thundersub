@@ -258,7 +258,6 @@ label.modal-addr-row:hover{background:rgba(0,0,0,.3)}
 .modal-addr-check{accent-color:var(--accent)}
 .modal-addr{flex:1;font-family:monospace;font-size:12px;color:var(--text)}
 .modal-method{font-size:10px;color:var(--muted);font-weight:600;padding:2px 6px;border-radius:6px;background:var(--border);white-space:nowrap}
-.modal-method.has-detail{cursor:help;text-decoration:underline dotted;text-underline-offset:2px}
 .method-select{flex:1;min-width:0}
 .method-help{font-size:11px;color:var(--muted);line-height:1.35;margin:4px 0 0 52px;word-break:break-word}
 .modal-addr-box{flex-direction:column;align-items:stretch;gap:6px;padding:8px 10px}

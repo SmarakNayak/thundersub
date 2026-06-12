@@ -372,12 +372,11 @@ const DISPOSE_LABELS = { delete: 'Deleted emails', move: 'Moved emails', keep: '
 
 // Full, human-readable description of how the unsubscribe will be performed,
 // including the destination website (for link methods) or address (for email).
-// Shown on hover so the modal stays uncluttered.
 // Native <select> popups size themselves to their widest option, and
 // unsubscribe URLs routinely run hundreds of characters. Keep the start
 // (scheme + domain) and the tail (where tracking tokens differ between
 // otherwise-identical URLs); the full URL of the selected method is shown
-// in the method-help line under the dropdown. Do not add title tooltips
+// in the method-help line under the method. Do not add title tooltips
 // to the options — confirmed buggy in Thunderbird 140 (tooltips render
 // detached from the cursor and linger after hovering away).
 function truncateMiddle(s, max = 64) {
@@ -390,14 +389,14 @@ function methodDetail(method) {
   if (!method) return 'No unsubscribe method was detected for this sender.';
   switch (method.type) {
     case 'oneclick':
-      return `One-click unsubscribe\nSends a secure POST request to:\n${method.url}`;
+      return `One-click unsubscribe - Sends a secure POST request to: ${method.url}`;
     case 'web':
-      return `Browser unsubscribe\nOpens this page in your browser:\n${method.url}`;
+      return `Browser unsubscribe - Opens this page in your browser: ${method.url}`;
     case 'embedded':
-      return `Embedded link\nOpens this link from the email body:\n${method.url}`;
+      return `Embedded link - Opens this link from the email body: ${method.url}`;
     case 'mail': {
       const addr = method.url.replace(/^mailto:/i, '').split('?')[0];
-      return `Email unsubscribe\nSends an unsubscribe email to:\n${addr}`;
+      return `Email unsubscribe - Sends an unsubscribe email to: ${addr}`;
     }
     default:
       return method.url || '';
@@ -790,8 +789,8 @@ function openUnsubModal(senderEmail, recipientAddress, isRetry = false) {
           ? el('select', { id: 'modal-method-select', class: 'method-select' },
               el('option', { value: 'auto' }, `Auto-best (${methodLabel})`),
               methodOptions)
-          : el('span', { class: 'modal-method has-detail', title: detail }, methodLabel)),
-      isRetry && el('div', { id: 'modal-method-help', class: 'method-help' }, detail)));
+          : el('span', { class: 'modal-method' }, methodLabel)),
+      el('div', { id: 'modal-method-help', class: 'method-help' }, detail)));
 
   if (isRetry) {
     document.getElementById('modal-method-select').addEventListener('change', (e) => {
