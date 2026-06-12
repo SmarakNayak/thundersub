@@ -61,6 +61,7 @@ body{display:flex;overflow:hidden}
 .badge-paused{background:rgba(245,158,11,.15);color:var(--warn)}
 .badge-stopped{background:rgba(239,68,68,.15);color:var(--danger)}
 .scan-stats-row{display:flex;flex-direction:column;gap:2px;font-size:11px;color:var(--muted)}
+.scan-stats-row span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 
 .filters-section{padding:16px 20px}
 .filters-section h3{font-size:11px;text-transform:uppercase;letter-spacing:.08em;color:var(--muted);margin-bottom:10px}

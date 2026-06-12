@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 
-import { UNSUB_REGEX, UNSUB_TERMS_BY_LANG } from '../unsub-detect.js';
+import { UNSUB_REGEX, UNSUB_TERMS_BY_LANG, mayContainUnsubWording } from '../unsub-detect.js';
 
 const repoFile = (name) => new URL(`../${name}`, import.meta.url);
 
@@ -114,6 +114,30 @@ test('compiled regex uses the Unicode flag', () => {
   assert.ok(UNSUB_REGEX.flags.includes('i'));
   // The recompiled global form (as background.js builds it) must stay valid.
   assert.doesNotThrow(() => globalRegex());
+});
+
+test('prefilter passes literal unsubscribe wording in raw HTML', () => {
+  assert.ok(mayContainUnsubWording('<p>Tired of these? <a href="https://x.example/u">Unsubscribe</a></p>'));
+  assert.ok(mayContainUnsubWording('Klik hier om je af te melden'));
+});
+
+test('prefilter passes terms hidden behind HTML entity encoding', () => {
+  assert.ok(mayContainUnsubWording('Se d&eacute;sabonner'),
+    'named accent entity');
+  assert.ok(mayContainUnsubWording('Darse&nbsp;de&nbsp;baja'),
+    'non-breaking-space separator');
+  assert.ok(mayContainUnsubWording('annullare l&rsquo;iscrizione'),
+    'curly-apostrophe entity');
+  assert.ok(mayContainUnsubWording('Wypisz si&#x119; z newslettera'),
+    'hex numeric entity');
+  assert.ok(mayContainUnsubWording('&#1054;&#1090;&#1087;&#1080;&#1089;&#1072;&#1090;&#1100;&#1089;&#1103;'),
+    'decimal numeric entities (Отписаться)');
+});
+
+test('prefilter rejects ordinary mail bodies', () => {
+  assert.ok(!mayContainUnsubWording(''));
+  assert.ok(!mayContainUnsubWording('<p>Your order has shipped &amp; is on its way.</p>'));
+  assert.ok(!mayContainUnsubWording('Re: Q3 budget &mdash; final figures attached'));
 });
 
 test('manifest uses the module-loading background page', () => {

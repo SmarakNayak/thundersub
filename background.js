@@ -6,15 +6,19 @@
  * adapted from BetterUnsubscribe by Luc Bennett (MPL-2.0):
  * https://github.com/LucBennett/BetterUnsubscribe */
 
-import { UNSUB_REGEX } from './unsub-detect.js';
+import { UNSUB_REGEX, mayContainUnsubWording } from './unsub-detect.js';
 
 // ── State ────────────────────────────────────────────────────────────────────
 let scanState = {
   status: 'idle',
   progress: 0,
   total: 0,
+  folderProgress: 0,
+  folderTotal: 0,
+  currentFolder: '',
   messagesScanned: 0,
   sendersFound: 0,
+  subscriptionEmailsFound: 0,
   message: '',
   done: false,
   paused: false,
@@ -174,8 +178,12 @@ async function fullReset() {
     status: 'idle',
     progress: 0,
     total: 0,
+    folderProgress: 0,
+    folderTotal: 0,
+    currentFolder: '',
     messagesScanned: 0,
     sendersFound: 0,
+    subscriptionEmailsFound: 0,
     message: '',
     done: false,
     paused: false,
@@ -292,6 +300,9 @@ function findEmbeddedLinkHTML(part) {
     }
   }
   if (!part.body || part.contentType !== 'text/html') return null;
+  // Bodies without any unsubscribe wording (the vast majority of mail) skip
+  // the DOM parse and tree walks below entirely.
+  if (!mayContainUnsubWording(part.body)) return null;
 
   try {
     const parser = new DOMParser();
@@ -693,9 +704,23 @@ function buildDeferredMovedGroup(headerMessageIds, movedHeaders, destinationFold
 }
 
 // ── Scanner ──────────────────────────────────────────────────────────────────
+// A single stalled message fetch (e.g. an IMAP body that never downloads)
+// would otherwise hang the sequential scan forever with no error.
+const MESSAGE_FETCH_TIMEOUT_MS = 30000;
+
+function withTimeout(promise, ms, label) {
+  let timer;
+  return Promise.race([
+    promise.finally(() => clearTimeout(timer)),
+    new Promise((_, reject) => {
+      timer = setTimeout(() => reject(new Error(`${label} timed out after ${ms / 1000}s`)), ms);
+    })
+  ]);
+}
+
 async function runScan() {
   const startedAt = Date.now();
-  scanState = { status: 'scanning', progress: 0, total: 0, messagesScanned: 0, sendersFound: 0, message: 'Loading accounts...', done: false };
+  scanState = { status: 'scanning', progress: 0, total: 0, folderProgress: 0, folderTotal: 0, currentFolder: '', messagesScanned: 0, sendersFound: 0, subscriptionEmailsFound: 0, message: 'Loading accounts...', done: false };
   console.log('[ThunderSub] Scan started');
 
   try {
@@ -717,24 +742,36 @@ async function runScan() {
         .filter(Boolean);
       const folders = await collectAllFolders(account);
       for (const f of folders) {
-        allFolders.push({ folder: f, accountName: account.name, accountAddresses });
+        let messageCount = 0;
+        try {
+          const info = await browser.folders.getFolderInfo(f.id);
+          messageCount = info.totalMessageCount || 0;
+        } catch (e) { /* Count stays unknown; progress total is best-effort */ }
+        allFolders.push({ folder: f, accountName: account.name, accountAddresses, messageCount });
       }
     }
 
-    scanState.total = allFolders.length;
-    scanState.message = `Scanning ${allFolders.length} folders...`;
-    console.log(`[ThunderSub] Scanning ${allFolders.length} folders across ${accounts.length} accounts`);
+    // Progress is message-based: one huge folder no longer pins the bar.
+    const totalMessages = allFolders.reduce((sum, f) => sum + f.messageCount, 0);
+    scanState.total = totalMessages;
+    scanState.folderTotal = allFolders.length;
+    scanState.message = `Scanning ${totalMessages.toLocaleString()} messages in ${allFolders.length} folders...`;
+    console.log(`[ThunderSub] Scanning ~${totalMessages} messages in ${allFolders.length} folders across ${accounts.length} accounts`);
 
     // Accumulate by (senderEmail, recipientAddress) — the atomic subscription unit
     const subs = {};
 
     for (let i = 0; i < allFolders.length; i++) {
-      const { folder, accountName, accountAddresses } = allFolders[i];
-      scanState.progress = i + 1;
-      scanState.message = `Folder ${i + 1} of ${allFolders.length}: ${accountName} | ${folder.name}`;
+      const { folder, accountName, accountAddresses, messageCount } = allFolders[i];
+      const folderLabel = `${accountName} | ${folder.name}`;
+      const folderStartedAt = Date.now();
+      let processedInFolder = 0;
+      scanState.folderProgress = i + 1;
+      scanState.currentFolder = folderLabel;
+      scanState.message = folderLabel;
 
       if (scanState.stopped) break;
-      console.log(`[ThunderSub] Scanning folder ${i + 1}/${allFolders.length}: ${accountName} | ${folder.name}`);
+      console.log(`[ThunderSub] Scanning folder ${i + 1}/${allFolders.length}: ${folderLabel} (${messageCount} messages)`);
 
       try {
         let messageFailures = 0;
@@ -748,12 +785,16 @@ async function runScan() {
               await new Promise(r => setTimeout(r, 200));
             }
             if (scanState.stopped) break pageLoop;
+            scanState.messagesScanned++;
+            scanState.progress = scanState.messagesScanned;
+            processedInFolder++;
             try {
               // Replies and forwards can contain unsubscribe links or headers
               // belonging to quoted/nested messages, not the outer sender.
               if (isReplyOrForwardSubject(m.subject)) continue;
 
-              const full = await browser.messages.getFull(m.id);
+              const full = await withTimeout(
+                browser.messages.getFull(m.id), MESSAGE_FETCH_TIMEOUT_MS, `getFull(${m.id})`);
               if (!full || !full.headers) continue;
 
               const listUnsub = full.headers['list-unsubscribe'];
@@ -772,7 +813,7 @@ async function runScan() {
               embeddedUrl = findEmbeddedUnsubLink(full);
               if (urls.length === 0 && !embeddedUrl) continue;
 
-              scanState.messagesScanned++;
+              scanState.subscriptionEmailsFound++;
 
               const { name, email } = parseFromHeader(m.author);
               if (!email) continue;
@@ -863,10 +904,11 @@ async function runScan() {
           }
         }
         if (messageFailures > 0) {
-          console.warn(`[ThunderSub] Skipped ${messageFailures} unreadable messages in: ${accountName} | ${folder.name}`, firstMessageFailure);
+          console.warn(`[ThunderSub] Skipped ${messageFailures} unreadable messages in: ${folderLabel}`, firstMessageFailure);
         }
+        console.log(`[ThunderSub] Finished folder ${folderLabel}: ${processedInFolder} messages in ${((Date.now() - folderStartedAt) / 1000).toFixed(1)}s`);
       } catch (e) {
-        console.warn(`[ThunderSub] Failed to scan folder: ${accountName} | ${folder.name}`, e);
+        console.warn(`[ThunderSub] Failed to scan folder: ${folderLabel}`, e);
       }
     }
 
@@ -967,16 +1009,21 @@ async function runScan() {
     await saveLastScan({
       messagesScanned: finalMessagesScanned,
       sendersFound: finalSendersFound,
+      subscriptionEmailsFound: scanState.subscriptionEmailsFound,
       interrupted: wasStopped,
       at: now
     });
 
     scanState = {
       status: 'done',
-      progress: wasStopped ? scanState.progress : allFolders.length,
-      total: allFolders.length,
+      progress: scanState.progress,
+      total: wasStopped ? scanState.total : scanState.progress,
+      folderProgress: scanState.folderProgress,
+      folderTotal: scanState.folderTotal,
+      currentFolder: '',
       messagesScanned: finalMessagesScanned,
       sendersFound: finalSendersFound,
+      subscriptionEmailsFound: scanState.subscriptionEmailsFound,
       message: wasStopped ? 'Scan interrupted.' : 'Scan complete.',
       done: true,
       paused: false,
@@ -986,7 +1033,7 @@ async function runScan() {
 
   } catch (e) {
     console.error('[ThunderSub] Scan failed:', e);
-    scanState = { status: 'idle', progress: 0, total: 0, message: `Error: ${e.message}`, done: false };
+    scanState = { status: 'idle', progress: 0, total: 0, folderProgress: 0, folderTotal: 0, currentFolder: '', messagesScanned: 0, sendersFound: 0, subscriptionEmailsFound: 0, message: `Error: ${e.message}`, done: false };
   }
 }
 
@@ -1330,6 +1377,7 @@ async function getStats() {
     unsubscribed: subs.filter(s => s.decision === 'unsubscribed').length,
     error: subs.filter(s => s.decision === 'error').length,
     emailsScanned: lastScan ? lastScan.messagesScanned : 0,
+    subscriptionEmails: lastScan ? lastScan.subscriptionEmailsFound || 0 : 0,
     lastScanAt: lastScan ? lastScan.at : null
   };
 }

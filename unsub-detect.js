@@ -156,3 +156,36 @@ export const UNSUB_REGEX = new RegExp(
   String.raw`(?<![\p{L}\p{N}_])(?:` + UNSUB_TERMS.join('|') + `)`,
   'iu'
 );
+
+// Named entities for the non-ASCII letters and separators that appear in the
+// terms above ("d&eacute;sabonner", "darse&nbsp;de&nbsp;baja"). Numeric
+// references (&#281;, &#x119;) are decoded generically, so only names need
+// listing here.
+const NAMED_ENTITIES = {
+  nbsp: ' ',
+  rsquo: '’',
+  eacute: 'é',
+  oacute: 'ó',
+  ccedil: 'ç',
+  atilde: 'ã',
+  auml: 'ä'
+};
+
+function fromCodePointSafe(code, original) {
+  return code <= 0x10ffff ? String.fromCodePoint(code) : original;
+}
+
+// Cheap prefilter over a raw (still entity-encoded) HTML or text body: false
+// guarantees that no text node in the parsed document can match UNSUB_REGEX,
+// letting callers skip DOM parsing entirely. A false positive only costs the
+// caller the DOM parse it would have done anyway.
+export function mayContainUnsubWording(body) {
+  const text = String(body || '');
+  if (UNSUB_REGEX.test(text)) return true;
+  if (!text.includes('&')) return false;
+  const decoded = text
+    .replace(/&#(\d{1,7});/g, (entity, dec) => fromCodePointSafe(Number(dec), entity))
+    .replace(/&#x([0-9a-f]{1,6});/gi, (entity, hex) => fromCodePointSafe(parseInt(hex, 16), entity))
+    .replace(/&([a-z]+);/gi, (entity, name) => NAMED_ENTITIES[name.toLowerCase()] ?? entity);
+  return UNSUB_REGEX.test(decoded);
+}

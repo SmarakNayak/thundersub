@@ -183,11 +183,8 @@ async function loadStats() {
   try {
     const s = await bg('getStats');
     document.getElementById('stat-scanned').textContent = (s.emailsScanned || 0).toLocaleString();
+    document.getElementById('stat-subemails').textContent = (s.subscriptionEmails || 0).toLocaleString();
     document.getElementById('stat-total').textContent = s.total;
-    document.getElementById('stat-pending').textContent = s.pending;
-    document.getElementById('stat-kept').textContent = s.kept;
-    document.getElementById('stat-unsub').textContent = s.unsubscribed;
-    document.getElementById('stat-error').textContent = s.error || 0;
     document.getElementById('fb-pending').textContent = s.pending;
     document.getElementById('fb-keep').textContent = s.kept;
     document.getElementById('fb-unsubscribed').textContent = s.unsubscribed;
@@ -204,10 +201,10 @@ async function loadStats() {
 function updateDecisionStats(previousDecision, nextDecision) {
   if (!previousDecision || previousDecision === nextDecision) return;
   const ids = {
-    pending: ['stat-pending', 'fb-pending'],
-    keep: ['stat-kept', 'fb-keep'],
-    unsubscribed: ['stat-unsub', 'fb-unsubscribed'],
-    error: ['stat-error', 'fb-error']
+    pending: ['fb-pending'],
+    keep: ['fb-keep'],
+    unsubscribed: ['fb-unsubscribed'],
+    error: ['fb-error']
   };
   const adjust = (decision, amount) => {
     for (const id of (ids[decision] || [])) {
@@ -233,10 +230,10 @@ function removeCachedSubscription(sub, dismissed = false) {
   if (dismissed) {
     adjustStat(['stat-total'], -1);
     adjustStat({
-      pending: ['stat-pending', 'fb-pending'],
-      keep: ['stat-kept', 'fb-keep'],
-      unsubscribed: ['stat-unsub', 'fb-unsubscribed'],
-      error: ['stat-error', 'fb-error']
+      pending: ['fb-pending'],
+      keep: ['fb-keep'],
+      unsubscribed: ['fb-unsubscribed'],
+      error: ['fb-error']
     }[sub.decision] || [], -1);
   }
   refreshRecipientFilter();
@@ -1388,8 +1385,9 @@ async function startScan() {
   msgEl.classList.remove('wrap');
   document.getElementById('scan-state-badge').textContent = '';
   document.getElementById('scan-state-badge').className = '';
-  document.getElementById('scan-stat-emails').textContent = '';
+  document.getElementById('scan-stat-folders').textContent = '';
   document.getElementById('scan-stat-subs').textContent = '';
+  document.getElementById('scan-stat-subemails').textContent = '';
   document.getElementById('scan-controls').style.display = 'flex';
 
   try {
@@ -1409,13 +1407,24 @@ function pollScanStatus() {
   scanPollTimer = setInterval(async () => {
     try {
       const s = await bg('getScanStatus');
-      const pct = s.total > 0 ? Math.round(s.progress / s.total * 100) : 0;
+      const pct = s.total > 0 ? Math.min(100, Math.round(s.progress / s.total * 100)) : 0;
       document.getElementById('progress-bar').style.width = pct + '%';
 
       const msgEl = document.getElementById('scan-msg');
       const badgeEl = document.getElementById('scan-state-badge');
-      document.getElementById('scan-stat-emails').textContent = (s.messagesScanned || 0).toLocaleString() + ' emails scanned';
+      const scannedCount = (s.messagesScanned || 0).toLocaleString();
+      const scannedText = s.total > 0
+        ? `${scannedCount}/${s.total.toLocaleString()} emails scanned`
+        : `${scannedCount} emails scanned`;
+      const foldersEl = document.getElementById('scan-stat-folders');
+      foldersEl.textContent = s.folderTotal > 0
+        ? `${s.folderProgress || 0}/${s.folderTotal} folders${s.currentFolder ? ` — ${s.currentFolder}` : ''}`
+        : '';
+      // Long account/folder names are ellipsized; the tooltip has the full text.
+      foldersEl.title = foldersEl.textContent;
       document.getElementById('scan-stat-subs').textContent = (s.sendersFound || 0) + ' subscriptions found';
+      document.getElementById('scan-stat-subemails').textContent =
+        (s.subscriptionEmailsFound || 0).toLocaleString() + ' subscription emails found';
       document.getElementById('pause-btn').textContent = s.paused ? 'Resume' : 'Pause';
 
       if (s.status === 'done' || s.done) {
@@ -1439,7 +1448,9 @@ function pollScanStatus() {
         const interrupted = s.message === 'Scan interrupted.';
         toast(`${s.message} Found ${s.sendersFound || 0} subscriptions.`, interrupted ? 'info' : 'success');
       } else {
-        msgEl.textContent = s.message || '';
+        // The top line starts as "Starting..."/"Loading accounts..." and
+        // becomes the live counter once the scan is underway.
+        msgEl.textContent = (s.total > 0 || s.messagesScanned > 0) ? scannedText : (s.message || '');
         msgEl.classList.remove('wrap');
         if (s.paused) {
           badgeEl.textContent = 'Paused';
