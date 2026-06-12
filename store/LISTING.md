@@ -119,21 +119,15 @@ They show the real tab UI (unmodified `tab/tab.html`/`tab.css`/`tab.js`) rendere
 demo data (`.example` senders, `alex@example.net` recipient) — regenerate any time with
 `bash store/screenshots/make.sh` (needs chromium or nix).
 
-## Release notes (1.0.8)
+## Release notes (1.0.9)
 
 ```
-Initial public release.
+Security and reliability update.
 
-• Scan all accounts and folders for subscriptions (List-Unsubscribe headers + embedded unsubscribe links in 13 languages)
-• Scan scope controls: choose which accounts and folders are scanned, and skip senders or whole domains
-• One-click (RFC 8058), email, and browser unsubscribe methods, with retry via any detected method
-• Cleanup actions to delete, move, or mark a sender's messages as Junk
-• Alias-aware grouping by sender and receiving address
-• Hardened against malicious senders: one-click endpoints validated (public https only), email content never rendered as HTML, and a warning before unsubscribing from senders without the standard unsubscribe header
-• Safe defaults: existing emails are kept on unsubscribe unless you choose otherwise
-• Optional dry-run mode to preview every action before it runs
-• Keep / dismiss / review-again workflow with a stats dashboard
-• Live message-level progress with pause and cancellation for scans and cleanup operations
+• Browser and embedded unsubscribe links are now validated before opening, blocking non-web schemes and local/private-network destinations
+• UI URL attributes reject executable javascript:, data:, and vbscript: schemes
+• Mark-as-junk cleanup now routes messages by unique account ID, preventing incorrect moves when accounts share a display name
+• Added regression tests for unsubscribe URL validation and duplicate-name account junk routing
 
 Compatible with Thunderbird 128 and later.
 ```
@@ -143,11 +137,11 @@ Compatible with Thunderbird 128 and later.
 ## Notes to reviewers (paste into "Notes to Reviewer" on upload)
 
 ```
-Version 1.0.8 supersedes the pending 1.0 through 1.0.7 submissions. Please review 1.0.8 for the initial public release.
+Version 1.0.9 supersedes the pending 1.0 through 1.0.8 submissions. Please review 1.0.9 for the initial public release.
 
 Source is plain, unminified JavaScript with no build step and no third-party libraries — the uploaded XPI is the source (repo: https://github.com/SmarakNayak/thundersub).
 
-The background runs as an ES module via a background page (background.html): background.js imports the localized unsubscribe-wording list from unsub-detect.js (embedded unsubscribe links in 13 languages), the sender skip-pattern matcher from scan-scope.js, and the one-click URL safety gate from unsub-url.js. All matching is local regex matching; no translation service or network involvement.
+The background runs as an ES module via a background page (background.html): background.js imports the localized unsubscribe-wording list from unsub-detect.js (embedded unsubscribe links in 13 languages), the sender skip-pattern matcher from scan-scope.js, the unsubscribe URL safety gates from unsub-url.js, and account-ID-based junk-folder routing from junk-routing.js. All matching is local regex matching; no translation service or network involvement.
 
 License: MPL-2.0. Portions of the unsubscribe detection and unsubscribe methods in background.js are adapted from BetterUnsubscribe by Luc Bennett (MPL-2.0, https://github.com/LucBennett/BetterUnsubscribe), with attribution in the file header and README. ThunderSub is an independent add-on with a different scope (whole-mailbox scanning, review queue, cleanup).
 
@@ -158,7 +152,7 @@ Permission justifications:
 - accountsRead / accountsFolders: enumerate accounts/folders for scanning and for the move-destination folder picker (browser.folders.create for the "new folder" option).
 - compose / compose.send: prepare mailto: unsubscribe emails. They open as drafts by default; compose.sendMessage is only called if the user enables the explicit "auto-send" toggle.
 - storage: persist scan results and user decisions locally.
-- <all_urls>: RFC 8058 one-click unsubscribe requires a POST (fetch) to whatever HTTPS endpoint the sender's List-Unsubscribe header specifies, which cannot be known in advance. Requests are only made when the user clicks Unsubscribe, and the URL is validated first (unsub-url.js): https only, with localhost, private/reserved IP ranges, and internal hostnames refused.
+- <all_urls>: RFC 8058 one-click unsubscribe requires a POST (fetch) to whatever HTTPS endpoint the sender's List-Unsubscribe header specifies, which cannot be known in advance. Requests are only made when the user clicks Unsubscribe. One-click URLs are limited to public HTTPS endpoints; browser-opened unsubscribe links may use HTTP or HTTPS. Both refuse localhost, private/reserved IP ranges, and internal hostnames (unsub-url.js).
 
 No remote code is loaded or executed. The UI never uses innerHTML: all rendering goes through a createElement/textContent element builder (el() in tab/tab.js), so strings from emails can only become text nodes and are never parsed as HTML. No user data leaves the machine.
 
