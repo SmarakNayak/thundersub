@@ -109,7 +109,7 @@ Upload `store/icon-128.png` (rendered from `icons/icon-64.svg`; `store/icon-64.p
 Ready to upload from `store/screenshots/`, in this order, with these captions:
 
 1. `01-dashboard.png` — "Every subscription across all your accounts in one place: scan results, email counts, and one-click review."
-2. `02-unsubscribe-modal.png` — "Unsubscribe and clean up in one step: pick the method, then delete, move, or keep the sender's existing emails per folder."
+2. `02-unsubscribe-modal.png` — "Unsubscribe and clean up in one step: pick the method, then keep, move, or delete the sender's existing emails per folder."
 3. `03-scan-progress.png` — "Scanning every folder with live progress — pause, resume, or stop at any time without losing results."
 4. `04-unsubscribed.png` — "Track what you've unsubscribed from, retry with another method, or clean up leftover emails later."
 5. `05-scan-scope.png` — "Control the scan: choose accounts and folders, and skip senders or whole domains before they're ever read."

@@ -779,12 +779,23 @@ function openUnsubModal(senderEmail, recipientAddress, isRetry = false) {
     });
   }
 
+  // Every unsubscribe method confirms to the sender that the address is
+  // live — warn harder when there's no List-Unsubscribe header, since
+  // body-scraped links from unknown senders are the riskiest to follow.
+  const trustHint = document.getElementById('modal-trust-hint');
+  const headerBased = (sub.unsubUrls || []).length > 0;
+  trustHint.classList.toggle('warn', !headerBased);
+  trustHint.textContent = headerBased
+    ? "Unsubscribing confirms to the sender that your address is active. Don't recognise this sender? Mark it as junk (🔥 on the card) instead."
+    : "⚠ This sender doesn't use the standard unsubscribe header — only a link found in the email body. Unsubscribing from untrusted senders is not recommended: it confirms your address is active. If in doubt, mark it as junk (🔥 on the card) instead.";
+
   renderModalSourceFolders(sub);
   document.querySelector('.modal-dispose h4').textContent = 'What to do with existing emails?';
   document.querySelector('.modal-dispose').style.display = 'block';
 
-  // Reset dispose & hide destination tree
-  document.querySelector('input[name="dispose"][value="delete"]').checked = true;
+  // Reset dispose & hide destination tree. "Leave emails" is the default:
+  // deletion should be a deliberate choice, not a hasty confirm away.
+  document.querySelector('input[name="dispose"][value="keep"]').checked = true;
   document.getElementById('modal-dest-wrap').style.display = 'none';
   document.getElementById('modal-new-folder-form').style.display = 'none';
 
@@ -794,6 +805,7 @@ function openUnsubModal(senderEmail, recipientAddress, isRetry = false) {
   confirmBtn.title = detail;
 
   document.getElementById('unsub-modal-overlay').classList.add('open');
+  onDisposeChange();
 }
 
 function openCleanupModal(senderEmail, recipientAddress, action) {
@@ -826,10 +838,12 @@ function openCleanupModal(senderEmail, recipientAddress, action) {
         el('span', { class: 'modal-kv-label' }, 'Status:'),
         el('span', { class: 'modal-method' }, statusLabel))));
 
+  document.getElementById('modal-trust-hint').textContent = '';
+
   renderModalSourceFolders(sub);
   document.querySelector('.modal-dispose h4').textContent = 'Email action';
   document.querySelector('.modal-dispose').style.display = 'block';
-  document.querySelector(`input[name="dispose"][value="${action || 'delete'}"]`).checked = true;
+  document.querySelector(`input[name="dispose"][value="${action || 'keep'}"]`).checked = true;
   document.getElementById('modal-dest-wrap').style.display = 'none';
   document.getElementById('modal-new-folder-form').style.display = 'none';
 

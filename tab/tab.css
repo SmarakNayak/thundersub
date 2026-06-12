@@ -264,6 +264,9 @@ label.modal-addr-row:hover{background:rgba(0,0,0,.3)}
 .modal-addr-box{flex-direction:column;align-items:stretch;gap:6px;padding:8px 10px}
 .modal-kv{display:flex;align-items:center;gap:8px;font-size:13px}
 .modal-kv-label{color:var(--muted);font-size:12px;font-weight:600;min-width:44px}
+.modal-trust-hint{font-size:11px;color:var(--muted);line-height:1.5;margin-top:10px}
+.modal-trust-hint:empty{display:none}
+.modal-trust-hint.warn{color:var(--warn)}
 .modal-dispose{margin-top:16px}
 .modal-dispose-options{display:flex;gap:8px}
 .dispose-option{display:flex;align-items:center;gap:5px;padding:8px 14px;border-radius:8px;background:rgba(0,0,0,.2);cursor:pointer;font-size:13px;font-weight:500;flex:1;transition:background .15s}
