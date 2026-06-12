@@ -8,6 +8,7 @@
 
 import { UNSUB_REGEX, mayContainUnsubWording } from './unsub-detect.js';
 import { buildSenderSkipMatcher } from './scan-scope.js';
+import { oneClickUrlBlockReason } from './unsub-url.js';
 
 // ── State ────────────────────────────────────────────────────────────────────
 let scanState = {
@@ -598,8 +599,9 @@ function getIdsForFolders(groups, selectedFolders) {
 // See: https://webextension-api.thunderbird.net/en/latest/messages.html#messages-messageid
 // Numeric ids created in this background session are current. Older ids are
 // re-resolved from stable RFC 5322 Message-ID headers within the group's folder.
-async function resolveCurrentMessageIds(groups, selectedFolders, traceId) {
+async function resolveCurrentMessageIds(groups, selectedFolders, senderEmail, traceId) {
   const startedAt = Date.now();
+  const expectedSender = String(senderEmail || '').toLowerCase();
   const selected = selectGroupsForFolders(groups, selectedFolders);
   const ids = new Set();
   const unresolvedHeaderIds = new Set();
@@ -644,6 +646,13 @@ async function resolveCurrentMessageIds(groups, selectedFolders, traceId) {
       found = await queryByHeaderMessageId(folderId, headerMessageId);
     } catch (e) {
       console.warn('[ThunderSub] Failed to resolve message by header id', headerMessageId, e);
+    }
+    // Message-IDs are sender-supplied and can be forged to collide with an
+    // unrelated message in the same folder. Only act on messages whose From
+    // matches the subscription, so a collision can't delete or move someone
+    // else's mail.
+    if (expectedSender) {
+      found = found.filter(message => parseFromHeader(message.author).email === expectedSender);
     }
     const duration = Date.now() - queryStartedAt;
     targetedQueries++;
@@ -1131,6 +1140,11 @@ async function runScan() {
 
 async function unsubOneClick(url, traceId) {
   const startedAt = Date.now();
+  const blockReason = oneClickUrlBlockReason(url);
+  if (blockReason) {
+    tracePhase(traceId, 'one-click-blocked', startedAt, { reason: blockReason });
+    throw new Error(`Blocked unsafe one-click unsubscribe URL (${blockReason}) — retry with the web or email method instead.`);
+  }
   const resp = await fetch(url, {
     method: 'POST',
     headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
@@ -1140,32 +1154,52 @@ async function unsubOneClick(url, traceId) {
   return { ok: resp.ok, status: resp.status };
 }
 
-async function unsubMail(mailtoUrl, traceId) {
+async function unsubMail(mailtoUrl, recipientAddress, traceId) {
   const startedAt = Date.now();
   const parsed = new URL(mailtoUrl);
   const to = parsed.pathname;
   const subject = parsed.searchParams.get('subject') || 'unsubscribe';
   const body = parsed.searchParams.get('body') || 'Please unsubscribe me from your mailing list. Thank you.';
 
+  // Send from the identity the subscription is addressed to, so the
+  // unsubscribe email never discloses an unrelated address of the user's
+  // to the sender. Only without a match fall back to the first identity.
   let identityId = null;
+  let fallbackIdentityId = null;
+  const wanted = String(recipientAddress || '').toLowerCase();
   try {
     const accounts = await browser.accounts.list();
+    outer:
     for (const account of accounts) {
       const identities = await browser.identities.list(account.id);
-      if (identities && identities.length > 0) {
-        identityId = identities[0].id;
-        break;
+      for (const identity of identities || []) {
+        fallbackIdentityId ||= identity.id;
+        if (wanted && (identity.email || '').toLowerCase() === wanted) {
+          identityId = identity.id;
+          break outer;
+        }
       }
     }
   } catch (e) {
     console.warn('[ThunderSub] Failed to select an identity for unsubscribe email; using Thunderbird default', e);
   }
+  const identityMatched = !!identityId;
+  if (!identityId) identityId = fallbackIdentityId;
 
   const details = { to, subject, body };
   if (identityId) details.identityId = identityId;
 
   const composeTab = await browser.compose.beginNew(details);
   const autoSend = await getAutoSendUnsubscribeEmails();
+  // Without an identity matching the subscribed address, sending as-is
+  // would disclose a different address of the user's to the sender. Always
+  // leave the compose window open for review (even when auto-send is on),
+  // and flag the mismatch so the UI can warn about the From address.
+  if (!identityMatched) {
+    console.warn(`[ThunderSub] No identity matches ${recipientAddress || '(unknown)'}; leaving the unsubscribe email as a draft for review`);
+    tracePhase(traceId, 'mailto-compose-draft-no-identity', startedAt);
+    return { ok: true, to, drafted: true, draftReason: 'no-identity-match' };
+  }
   if (!autoSend) {
     tracePhase(traceId, 'mailto-compose-draft', startedAt);
     return { ok: true, to, drafted: true };
@@ -1276,7 +1310,7 @@ async function junkEmails(senderEmail, recipientAddress, messageGroups) {
   let totalIds = 0;
 
   for (const group of messageGroups) {
-    const { ids, unresolvedHeaderIds } = await resolveCurrentMessageIds([group], null);
+    const { ids, unresolvedHeaderIds } = await resolveCurrentMessageIds([group], null, senderEmail);
     if (unresolvedHeaderIds.length > 0) {
       console.warn(`[ThunderSub] ${unresolvedHeaderIds.length} message(s) could not be re-resolved before junking:`, unresolvedHeaderIds);
     }
@@ -1335,7 +1369,7 @@ async function deleteEmails(senderEmail, recipientAddress, messageGroups, select
     return { deleted: 0 };
   }
 
-  const { ids, unresolvedHeaderIds, cancelled } = await resolveCurrentMessageIds(messageGroups, selectedFolders, traceId);
+  const { ids, unresolvedHeaderIds, cancelled } = await resolveCurrentMessageIds(messageGroups, selectedFolders, senderEmail, traceId);
   if (cancelled) return { deleted: 0, cancelled: true, actionCompleted: false };
   if (unresolvedHeaderIds.length > 0) {
     console.warn(`[ThunderSub] ${unresolvedHeaderIds.length} message(s) could not be re-resolved before delete (moved or removed):`, unresolvedHeaderIds);
@@ -1375,7 +1409,7 @@ async function moveEmails(senderEmail, recipientAddress, messageGroups, selected
     return { moved: 0 };
   }
 
-  const { ids, unresolvedHeaderIds, cancelled } = await resolveCurrentMessageIds(messageGroups, selectedFolders, traceId);
+  const { ids, unresolvedHeaderIds, cancelled } = await resolveCurrentMessageIds(messageGroups, selectedFolders, senderEmail, traceId);
   if (cancelled) return { moved: 0, cancelled: true, actionCompleted: false };
   if (unresolvedHeaderIds.length > 0) {
     console.warn(`[ThunderSub] ${unresolvedHeaderIds.length} message(s) could not be re-resolved before move (moved or removed):`, unresolvedHeaderIds);
@@ -1703,7 +1737,7 @@ function handleRuntimeMessage(request, sender) {
     case 'unsubMail':
       return getDryRun().then(dryRun => dryRun
         ? dryRunUnsubscribe('email', request.url)
-        : unsubMail(request.url, request.traceId));
+        : unsubMail(request.url, request.recipientAddress, request.traceId));
 
     case 'unsubWeb':
       return getDryRun().then(dryRun => dryRun

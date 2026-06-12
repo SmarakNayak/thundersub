@@ -156,9 +156,9 @@ Permission justifications:
 - accountsRead / accountsFolders: enumerate accounts/folders for scanning and for the move-destination folder picker (browser.folders.create for the "new folder" option).
 - compose / compose.send: prepare mailto: unsubscribe emails. They open as drafts by default; compose.sendMessage is only called if the user enables the explicit "auto-send" toggle.
 - storage: persist scan results and user decisions locally.
-- <all_urls>: RFC 8058 one-click unsubscribe requires a POST (fetch) to whatever HTTPS endpoint the sender's List-Unsubscribe header specifies, which cannot be known in advance. Requests are only made when the user clicks Unsubscribe.
+- <all_urls>: RFC 8058 one-click unsubscribe requires a POST (fetch) to whatever HTTPS endpoint the sender's List-Unsubscribe header specifies, which cannot be known in advance. Requests are only made when the user clicks Unsubscribe, and the URL is validated first (unsub-url.js): https only, with localhost, private/reserved IP ranges, and internal hostnames refused.
 
-No remote code is loaded or executed. innerHTML is used for UI rendering only, with all dynamic values passed through an HTML-escaping helper (esc() in tab/tab.js). No user data leaves the machine.
+No remote code is loaded or executed. The UI never uses innerHTML: all rendering goes through a createElement/textContent element builder (el() in tab/tab.js), so strings from emails can only become text nodes and are never parsed as HTML. No user data leaves the machine.
 
 Testing tip: click the toolbar button -> "Open ThunderSub" -> "Scan Emails" against any profile with newsletter mail. Enabling the "Dry Run" toggle in the sidebar makes every action simulated and reported via toasts instead of executed.
 ```

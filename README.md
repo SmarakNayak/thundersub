@@ -115,7 +115,7 @@ Then in Thunderbird: **≡ Menu → Add-ons and Themes** → gear icon → **Ins
 | `accountsRead`, `accountsFolders` | List your accounts and folders to scan, and build the move-destination tree. |
 | `compose`, `compose.send` | Prepare (and, only if you enable auto-send, send) `mailto:` unsubscribe emails. |
 | `storage` | Save scan results and your decisions locally. |
-| `<all_urls>` | Send one-click (RFC 8058) unsubscribe POST requests to whatever domain the sender specifies. |
+| `<all_urls>` | Send one-click (RFC 8058) unsubscribe POST requests to whatever domain the sender specifies. URLs are validated first: public `https://` endpoints only — localhost, private-network IPs, and internal hostnames are refused. |
 
 ## FAQ
 

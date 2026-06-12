@@ -25,8 +25,23 @@ function refreshScanButtonLabel() {
 }
 
 // ── Utils ────────────────────────────────────────────────────────────────────
-function esc(s) {
-  return String(s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+// All UI is built with this element helper — never innerHTML — so strings
+// from emails can only ever become text nodes; no string is parsed as HTML
+// anywhere in the page. Children may be elements, strings/numbers (text),
+// or nested arrays; null/undefined/false children are dropped, so
+// `cond && el(...)` works. Attribute values go through setAttribute
+// (boolean true sets an empty attribute, false/null omits it), and
+// event-handler attributes are rejected — listeners are attached with
+// addEventListener only.
+function el(tag, attrs = {}, ...children) {
+  const node = document.createElement(tag);
+  for (const [name, value] of Object.entries(attrs)) {
+    if (value == null || value === false) continue;
+    if (/^on/i.test(name)) throw new Error(`Refusing event-handler attribute: ${name}`);
+    node.setAttribute(name, value === true ? '' : String(value));
+  }
+  node.append(...children.flat(Infinity).filter(c => c !== null && c !== undefined && c !== false));
+  return node;
 }
 
 function toast(msg, type = 'info') {
@@ -266,7 +281,7 @@ function formatLastScan(iso) {
 // ── Subscriptions loading ────────────────────────────────────────────────────
 async function loadSubs(filter) {
   const grid = document.getElementById('cards-grid');
-  grid.innerHTML = '<div id="loading"><div class="spinner"></div>Loading...</div>';
+  grid.replaceChildren(el('div', { id: 'loading' }, el('div', { class: 'spinner' }), 'Loading...'));
   document.getElementById('empty-state').style.display = 'none';
 
   try {
@@ -275,7 +290,7 @@ async function loadSubs(filter) {
     refreshRecipientFilter();
     renderFilteredCards();
   } catch (e) {
-    grid.innerHTML = '<div style="color:var(--danger);padding:40px">Failed to load.</div>';
+    grid.replaceChildren(el('div', { style: 'color:var(--danger);padding:40px' }, 'Failed to load.'));
   }
 }
 
@@ -286,7 +301,7 @@ function refreshRecipientFilter() {
   if (currentRecipientFilter && !recipients.includes(currentRecipientFilter)) {
     currentRecipientFilter = '';
   }
-  select.innerHTML = '<option value="">All receiving addresses</option>';
+  select.replaceChildren(el('option', { value: '' }, 'All receiving addresses'));
   for (const recipient of recipients) {
     const option = document.createElement('option');
     option.value = recipient;
@@ -313,12 +328,12 @@ function renderCards(subs) {
   const empty = document.getElementById('empty-state');
 
   if (!subs.length) {
-    grid.innerHTML = '';
+    grid.replaceChildren();
     empty.style.display = 'block';
     return;
   }
   empty.style.display = 'none';
-  grid.innerHTML = subs.map(s => buildCard(s)).join('');
+  grid.replaceChildren(...subs.map(s => buildCard(s)));
 }
 
 // ── Message group helpers ─────────────────────────────────────────────────────
@@ -405,52 +420,56 @@ function getAvailableMethods(sub) {
 function buildDetectionEvidence(s) {
   const evidence = s.detectionEvidence || [];
   if (!evidence.length) {
-    return '<div class="evidence-empty">No per-message detection evidence is available. Run a new scan.</div>';
+    return [el('div', { class: 'evidence-empty' }, 'No per-message detection evidence is available. Run a new scan.')];
   }
   return evidence.map(e => {
-    const sources = (e.sources || []).map(source =>
-      `<span class="badge ${source === 'header' ? 'badge-green' : 'badge-purple'}">${esc(source)}</span>`
-    ).join('');
     const urls = [...(e.headerUrls || []), ...(e.embeddedUrl ? [e.embeddedUrl] : [])];
-    return `
-      <div class="evidence-item">
-        <div class="evidence-heading">${sources}<span>${esc(e.subject || '(no subject)')}</span></div>
-        <div class="evidence-meta">
-          <span>${esc(e.accountName || '')} | ${esc(e.folderName || '')}</span>
-          <span>Receiver source: ${esc(e.recipientSource || 'unknown')}</span>
-          <span>${esc(e.author || '')}</span>
-          <span>${esc(e.date ? new Date(e.date).toLocaleString() : '')}</span>
-        </div>
-        ${urls.length ? `<div class="evidence-urls">${urls.map(url => `<div>${esc(url)}</div>`).join('')}</div>` : ''}
-        ${e.headerMessageId ? `<div class="evidence-message-id">Message-ID: ${esc(e.headerMessageId)}</div>` : ''}
-      </div>`;
-  }).join('');
+    return el('div', { class: 'evidence-item' },
+      el('div', { class: 'evidence-heading' },
+        (e.sources || []).map(source =>
+          el('span', { class: `badge ${source === 'header' ? 'badge-green' : 'badge-purple'}` }, source)),
+        el('span', {}, e.subject || '(no subject)')),
+      el('div', { class: 'evidence-meta' },
+        el('span', {}, `${e.accountName || ''} | ${e.folderName || ''}`),
+        el('span', {}, `Receiver source: ${e.recipientSource || 'unknown'}`),
+        el('span', {}, e.author || ''),
+        el('span', {}, e.date ? new Date(e.date).toLocaleString() : '')),
+      urls.length > 0 && el('div', { class: 'evidence-urls' }, urls.map(url => el('div', {}, url))),
+      e.headerMessageId && el('div', { class: 'evidence-message-id' }, `Message-ID: ${e.headerMessageId}`));
+  });
 }
 
 // ── Build card ───────────────────────────────────────────────────────────────
 function buildActions(s) {
-  const attrs = `data-sender-email="${esc(s.senderEmail)}" data-recipient-address="${esc(s.recipientAddress || '')}"`;
+  const attrs = { 'data-sender-email': s.senderEmail, 'data-recipient-address': s.recipientAddress || '' };
+  const reviewTitle = 'Move this subscription back to Pending for review.';
+  const btn = (cls, label, title) => el('button', { class: cls, title, ...attrs }, label);
 
   if (s.decision === 'keep') {
-    return `
-    <button class="btn btn-view js-view" ${attrs}>View</button>
-    <button class="btn btn-keep js-unkeep" title="Move this subscription back to Pending for review." ${attrs}>Review Again</button>`;
+    return [
+      btn('btn btn-view js-view', 'View'),
+      btn('btn btn-keep js-unkeep', 'Review Again', reviewTitle)
+    ];
   }
 
   if (s.decision === 'unsubscribed' || s.decision === 'error') {
     // View and Cleanup act on stored messages; with none left they can only fail.
-    const messageButtons = subHasMessages(s) ? `
-    <button class="btn btn-view js-view" ${attrs}>View</button>
-    <button class="btn btn-outline js-cleanup" ${attrs}>Cleanup</button>` : '';
-    return `${messageButtons}
-    <button class="btn btn-unsub js-retry" ${attrs}>Retry</button>
-    <button class="btn btn-keep js-reset-pending" title="Move this subscription back to Pending for review." ${attrs}>Review Again</button>`;
+    const messageButtons = subHasMessages(s) ? [
+      btn('btn btn-view js-view', 'View'),
+      btn('btn btn-outline js-cleanup', 'Cleanup')
+    ] : [];
+    return [
+      ...messageButtons,
+      btn('btn btn-unsub js-retry', 'Retry'),
+      btn('btn btn-keep js-reset-pending', 'Review Again', reviewTitle)
+    ];
   }
 
-  return `
-    <button class="btn btn-view js-view" ${attrs}>View</button>
-    <button class="btn btn-keep js-keep" ${attrs}>Keep Subscription</button>
-    <button class="btn btn-unsub js-open-modal" ${attrs}>Unsubscribe</button>`;
+  return [
+    btn('btn btn-view js-view', 'View'),
+    btn('btn btn-keep js-keep', 'Keep Subscription'),
+    btn('btn btn-unsub js-open-modal', 'Unsubscribe')
+  ];
 }
 
 function buildCard(s) {
@@ -462,46 +481,47 @@ function buildCard(s) {
   const accountNames = Object.keys(byAccount);
 
   // Badges
-  let badges = `<span class="badge badge-blue">${s.emailCount} emails</span>`;
-  if (s.decision === 'keep') badges += `<span class="badge badge-kept">Kept</span>`;
+  const badges = [el('span', { class: 'badge badge-blue' }, `${s.emailCount} emails`)];
+  if (s.decision === 'keep') badges.push(el('span', { class: 'badge badge-kept' }, 'Kept'));
   if (s.decision === 'unsubscribed') {
-    badges += `<span class="badge badge-unsub">Unsubscribed</span>`;
-    if (s.dispose && DISPOSE_LABELS[s.dispose]) badges += `<span class="badge badge-neutral">${DISPOSE_LABELS[s.dispose]}</span>`;
+    badges.push(el('span', { class: 'badge badge-unsub' }, 'Unsubscribed'));
+    if (s.dispose && DISPOSE_LABELS[s.dispose]) badges.push(el('span', { class: 'badge badge-neutral' }, DISPOSE_LABELS[s.dispose]));
   }
-  if (s.decision === 'error') badges += `<span class="badge badge-error">Error</span>`;
+  if (s.decision === 'error') badges.push(el('span', { class: 'badge badge-error' }, 'Error'));
 
   const dateStr = s.lastDate ? new Date(s.lastDate).toLocaleDateString() : '';
-  const cardId = `card-${id}`;
   const dismissable = s.decision === 'unsubscribed' || s.decision === 'error';
-  const attrs = `data-sender-email="${esc(s.senderEmail)}" data-recipient-address="${esc(s.recipientAddress || '')}"`;
+  const attrs = { 'data-sender-email': s.senderEmail, 'data-recipient-address': s.recipientAddress || '' };
 
-  return `
-<div class="card" id="${cardId}" data-sender-email="${esc(s.senderEmail)}" data-recipient-address="${esc(s.recipientAddress || '')}">
-  <div class="card-body">
-    ${dismissable ? `<button class="card-dismiss js-dismiss" title="Dismiss and stop tracking this subscription" aria-label="Dismiss and stop tracking this subscription" ${attrs}>&#128465;</button>` : ''}
-    ${s.decision === 'pending' && subHasMessages(s) ? `<button class="card-dismiss js-junk" title="Phishing or spam? Mark all emails as junk and move them to spam — trains your filters, and the sender is never contacted" aria-label="Mark all emails as junk and move them to spam" ${attrs}>&#128293;</button>` : ''}
-    <div class="card-top">
-      <div class="avatar" style="background:${color}">${esc(ini)}</div>
-      <div class="card-info">
-        <div class="sender-name" title="${esc(s.senderName)}">${esc(s.senderName || '(no name)')}</div>
-        <div class="sender-email" title="${esc(s.senderEmail)}">${esc(s.senderEmail)}</div>
-      </div>
-    </div>
-    <div class="card-badges">${badges}</div>
-    <div class="card-meta">
-      <span>${esc(dateStr)}</span>
-      <span>${accountNames.map(a => esc(a)).join(', ')}</span>
-    </div>
-    ${s.recipientAddress ? `<div class="card-accounts" title="Delivered to ${esc(s.recipientAddress)}">→ ${esc(s.recipientAddress)}</div>` : ''}
-    ${s.sampleSubject ? `<div class="card-subject" title="${esc(s.sampleSubject)}">"${esc(s.sampleSubject.substring(0, 80))}"</div>` : ''}
-    ${s.error?.message ? `<div class="card-error" title="${esc(s.error.message)}">${esc(s.error.stage || 'Error')}: ${esc(s.error.message)}</div>` : ''}
-    ${SHOW_DETECTION_UI ? '<button class="evidence-toggle js-evidence-toggle" type="button">Why detected?</button>' : ''}
-  </div>
-  ${SHOW_DETECTION_UI ? `<div class="detection-evidence">${buildDetectionEvidence(s)}</div>` : ''}
-  <div class="card-actions">
-    ${buildActions(s)}
-  </div>
-</div>`;
+  return el('div', { class: 'card', id: `card-${id}`, ...attrs },
+    el('div', { class: 'card-body' },
+      dismissable && el('button', {
+        class: 'card-dismiss js-dismiss',
+        title: 'Dismiss and stop tracking this subscription',
+        'aria-label': 'Dismiss and stop tracking this subscription',
+        ...attrs
+      }, '\u{1F5D1}'),
+      s.decision === 'pending' && subHasMessages(s) && el('button', {
+        class: 'card-dismiss js-junk',
+        title: 'Phishing or spam? Mark all emails as junk and move them to spam — trains your filters, and the sender is never contacted',
+        'aria-label': 'Mark all emails as junk and move them to spam',
+        ...attrs
+      }, '\u{1F525}'),
+      el('div', { class: 'card-top' },
+        el('div', { class: 'avatar', style: `background:${color}` }, ini),
+        el('div', { class: 'card-info' },
+          el('div', { class: 'sender-name', title: s.senderName }, s.senderName || '(no name)'),
+          el('div', { class: 'sender-email', title: s.senderEmail }, s.senderEmail))),
+      el('div', { class: 'card-badges' }, badges),
+      el('div', { class: 'card-meta' },
+        el('span', {}, dateStr),
+        el('span', {}, accountNames.join(', '))),
+      s.recipientAddress && el('div', { class: 'card-accounts', title: `Delivered to ${s.recipientAddress}` }, `→ ${s.recipientAddress}`),
+      s.sampleSubject && el('div', { class: 'card-subject', title: s.sampleSubject }, `"${s.sampleSubject.substring(0, 80)}"`),
+      s.error?.message && el('div', { class: 'card-error', title: s.error.message }, `${s.error.stage || 'Error'}: ${s.error.message}`),
+      SHOW_DETECTION_UI && el('button', { class: 'evidence-toggle js-evidence-toggle', type: 'button' }, 'Why detected?')),
+    SHOW_DETECTION_UI && el('div', { class: 'detection-evidence' }, buildDetectionEvidence(s)),
+    el('div', { class: 'card-actions' }, buildActions(s)));
 }
 
 // ── Event delegation (attached once in DOMContentLoaded) ─────────────────────
@@ -699,15 +719,11 @@ function renderModalSourceFolders(sub) {
   const foldersSection = document.getElementById('modal-folders-section');
   const foldersEl = document.getElementById('modal-folders');
 
-  foldersEl.innerHTML = '';
-  if (groups.length > 0) {
-    foldersEl.innerHTML = groups.map((g, i) => `
-      <label class="modal-folder-row">
-        <input type="checkbox" class="modal-folder-check" data-idx="${i}" checked>
-        <span class="modal-folder-name">${esc(g.accountName)} | ${esc(g.folderName)}</span>
-        <span class="modal-folder-count">${groupMessageCount(g)}</span>
-      </label>`).join('');
-  }
+  foldersEl.replaceChildren(...groups.map((g, i) =>
+    el('label', { class: 'modal-folder-row' },
+      el('input', { type: 'checkbox', class: 'modal-folder-check', 'data-idx': i, checked: true }),
+      el('span', { class: 'modal-folder-name' }, `${g.accountName} | ${g.folderName}`),
+      el('span', { class: 'modal-folder-count' }, groupMessageCount(g)))));
   foldersSection.style.display = groups.length > 0 ? 'block' : 'none';
 }
 
@@ -732,32 +748,27 @@ function openUnsubModal(senderEmail, recipientAddress, isRetry = false) {
 
   const availableMethods = getAvailableMethods(sub);
   const methodOptions = availableMethods.map((candidate, index) =>
-    `<option value="${index}">${esc(METHOD_LABELS[candidate.type])}: ${esc(candidate.url)}</option>`
-  ).join('');
+    el('option', { value: index }, `${METHOD_LABELS[candidate.type]}: ${candidate.url}`)
+  );
 
   // Retry exposes every detected method while first-time unsubscribe shows the auto-best choice.
   const addrEl = document.getElementById('modal-addresses');
-  addrEl.innerHTML = `
-    <div class="modal-addr-row modal-addr-box">
-      <div class="modal-kv">
-        <span class="modal-kv-label">From:</span>
-        <span class="modal-addr">${esc(sub.senderEmail)}</span>
-      </div>
-      <div class="modal-kv">
-        <span class="modal-kv-label">To:</span>
-        <span class="modal-addr">${esc(recipientAddress || '(unknown)')}</span>
-      </div>
-      <div class="modal-kv">
-        <span class="modal-kv-label">Via:</span>
-        ${isRetry
-          ? `<select id="modal-method-select" class="method-select">
-              <option value="auto">Auto-best (${esc(methodLabel)})</option>
-              ${methodOptions}
-            </select>`
-          : `<span class="modal-method has-detail" title="${esc(detail)}">${esc(methodLabel)}</span>`}
-      </div>
-      ${isRetry ? `<div id="modal-method-help" class="method-help">${esc(detail)}</div>` : ''}
-    </div>`;
+  addrEl.replaceChildren(
+    el('div', { class: 'modal-addr-row modal-addr-box' },
+      el('div', { class: 'modal-kv' },
+        el('span', { class: 'modal-kv-label' }, 'From:'),
+        el('span', { class: 'modal-addr' }, sub.senderEmail)),
+      el('div', { class: 'modal-kv' },
+        el('span', { class: 'modal-kv-label' }, 'To:'),
+        el('span', { class: 'modal-addr' }, recipientAddress || '(unknown)')),
+      el('div', { class: 'modal-kv' },
+        el('span', { class: 'modal-kv-label' }, 'Via:'),
+        isRetry
+          ? el('select', { id: 'modal-method-select', class: 'method-select' },
+              el('option', { value: 'auto' }, `Auto-best (${methodLabel})`),
+              methodOptions)
+          : el('span', { class: 'modal-method has-detail', title: detail }, methodLabel)),
+      isRetry && el('div', { id: 'modal-method-help', class: 'method-help' }, detail)));
 
   if (isRetry) {
     document.getElementById('modal-method-select').addEventListener('change', (e) => {
@@ -803,21 +814,17 @@ function openCleanupModal(senderEmail, recipientAddress, action) {
 
   document.getElementById('modal-title').textContent =
     `Manage emails from ${sub.senderName || sub.senderEmail}`;
-  document.getElementById('modal-addresses').innerHTML = `
-    <div class="modal-addr-row modal-addr-box">
-      <div class="modal-kv">
-        <span class="modal-kv-label">From:</span>
-        <span class="modal-addr">${esc(sub.senderEmail)}</span>
-      </div>
-      <div class="modal-kv">
-        <span class="modal-kv-label">To:</span>
-        <span class="modal-addr">${esc(recipientAddress || '(unknown)')}</span>
-      </div>
-      <div class="modal-kv">
-        <span class="modal-kv-label">Status:</span>
-        <span class="modal-method">${esc(statusLabel)}</span>
-      </div>
-    </div>`;
+  document.getElementById('modal-addresses').replaceChildren(
+    el('div', { class: 'modal-addr-row modal-addr-box' },
+      el('div', { class: 'modal-kv' },
+        el('span', { class: 'modal-kv-label' }, 'From:'),
+        el('span', { class: 'modal-addr' }, sub.senderEmail)),
+      el('div', { class: 'modal-kv' },
+        el('span', { class: 'modal-kv-label' }, 'To:'),
+        el('span', { class: 'modal-addr' }, recipientAddress || '(unknown)')),
+      el('div', { class: 'modal-kv' },
+        el('span', { class: 'modal-kv-label' }, 'Status:'),
+        el('span', { class: 'modal-method' }, statusLabel))));
 
   renderModalSourceFolders(sub);
   document.querySelector('.modal-dispose h4').textContent = 'Email action';
@@ -864,13 +871,13 @@ async function onDisposeChange() {
     destWrap.style.display = 'block';
     // Lazy-load folder tree
     if (!folderTreeCache) {
-      document.getElementById('modal-dest-tree').innerHTML =
-        '<div style="padding:8px;color:var(--muted);font-size:12px">Loading folders...</div>';
+      document.getElementById('modal-dest-tree').replaceChildren(
+        el('div', { style: 'padding:8px;color:var(--muted);font-size:12px' }, 'Loading folders...'));
       try {
         folderTreeCache = await bg('getFolderTree');
       } catch (e) {
-        document.getElementById('modal-dest-tree').innerHTML =
-          '<div style="padding:8px;color:var(--danger);font-size:12px">Failed to load folders.</div>';
+        document.getElementById('modal-dest-tree').replaceChildren(
+          el('div', { style: 'padding:8px;color:var(--danger);font-size:12px' }, 'Failed to load folders.'));
         return;
       }
     }
@@ -890,18 +897,14 @@ function renderRelevantFolderTree() {
 
 function renderFolderTree(tree) {
   const container = document.getElementById('modal-dest-tree');
-  let html = '';
-  for (const account of tree) {
-    html += `<div class="tree-account" data-root-folder-id="${esc(account.rootFolderId || '')}">
-      <div class="tree-account-name">${esc(account.accountName)}</div>
-      ${renderFolderNodes(account.folders, 0)}
-    </div>`;
-  }
-  container.innerHTML = html;
+  container.replaceChildren(...tree.map(account =>
+    el('div', { class: 'tree-account', 'data-root-folder-id': account.rootFolderId || '' },
+      el('div', { class: 'tree-account-name' }, account.accountName),
+      renderFolderNodes(account.folders, 0))));
 }
 
 function renderFolderNodes(folders, depth) {
-  let html = '';
+  const nodes = [];
   for (const f of folders) {
     const hasChildren = f.subFolders && f.subFolders.length > 0;
     const name = (f.name || '').toLowerCase();
@@ -914,23 +917,26 @@ function renderFolderNodes(folders, depth) {
       path === 'all mail' ||
       path.endsWith('/all mail') ||
       f.type === 'virtual';
-    const indent = depth * 16;
-    html += `<div class="tree-node" style="padding-left:${indent}px">
-      <label class="tree-folder-label${isMoveTargetDisabled ? ' tree-folder-disabled' : ''}" title="${isMoveTargetDisabled ? 'Messages cannot be moved into this folder, but it can be the parent of a new folder' : ''}">
-        ${hasChildren
-          ? `<span class="tree-toggle" data-folder-id="${esc(f.id)}">&#9656;</span>`
-          : '<span class="tree-spacer"></span>'}
-        <input type="radio" name="dest-folder" value="${esc(f.id)}" data-folder-name="${esc(f.name)}" data-folder-path="${esc(f.path || f.name)}"${isMoveTargetDisabled ? ' data-move-disabled="1"' : ''}>
-        <span class="tree-folder-name">${esc(f.name)}${isMoveTargetDisabled ? ' (cannot receive mail)' : ''}</span>
-      </label>
-    </div>`;
+    nodes.push(el('div', { class: 'tree-node', style: `padding-left:${depth * 16}px` },
+      el('label', {
+        class: `tree-folder-label${isMoveTargetDisabled ? ' tree-folder-disabled' : ''}`,
+        title: isMoveTargetDisabled ? 'Messages cannot be moved into this folder, but it can be the parent of a new folder' : ''
+      },
+        hasChildren
+          ? el('span', { class: 'tree-toggle', 'data-folder-id': f.id }, '▸')
+          : el('span', { class: 'tree-spacer' }),
+        el('input', {
+          type: 'radio', name: 'dest-folder', value: f.id,
+          'data-folder-name': f.name, 'data-folder-path': f.path || f.name,
+          'data-move-disabled': isMoveTargetDisabled ? '1' : false
+        }),
+        el('span', { class: 'tree-folder-name' }, `${f.name}${isMoveTargetDisabled ? ' (cannot receive mail)' : ''}`))));
     if (hasChildren) {
-      html += `<div class="tree-subtree" data-parent-id="${esc(f.id)}" style="display:none">
-        ${renderFolderNodes(f.subFolders, depth + 1)}
-      </div>`;
+      nodes.push(el('div', { class: 'tree-subtree', 'data-parent-id': f.id, style: 'display:none' },
+        renderFolderNodes(f.subFolders, depth + 1)));
     }
   }
-  return html;
+  return nodes;
 }
 
 async function createNewFolder() {
@@ -1126,7 +1132,7 @@ async function doUnsubscribeConfirm() {
         unsubscribeResult = r;
         ok = r.ok;
       } else if (method.type === 'mail') {
-        unsubscribeResult = await trace.bg('unsubMail', { url: method.url, senderEmail: modalSenderEmail });
+        unsubscribeResult = await trace.bg('unsubMail', { url: method.url, recipientAddress: modalRecipientAddress });
         ok = true;
       } else if (method.type === 'embedded') {
         unsubscribeResult = await trace.bg('unsubEmbedded', { url: method.url });
@@ -1305,7 +1311,12 @@ async function doUnsubscribeConfirm() {
   if (modalMode === 'cleanup') {
     outcomeMessage = `Updated email cleanup for ${name}`;
   } else if (unsubscribeResult?.drafted) {
-    outcomeMessage = `Prepared unsubscribe email draft for ${name}`;
+    if (unsubscribeResult.draftReason === 'no-identity-match') {
+      outcomeMessage = `Opened unsubscribe email as a draft for ${name} — no identity matches ${sub.recipientAddress || 'the receiving address'}, so check the From address and send it yourself`;
+      outcomeType = 'info';
+    } else {
+      outcomeMessage = `Prepared unsubscribe email draft for ${name}`;
+    }
   } else if (unsubscribeResult?.sent) {
     outcomeMessage = `Sent unsubscribe email for ${name}`;
   } else if (ok) {
@@ -1380,12 +1391,12 @@ function accountTypeLabel(type) {
 async function openScanScopeModal() {
   document.getElementById('scope-modal-overlay').classList.add('open');
   const treeEl = document.getElementById('scope-tree');
-  treeEl.innerHTML = '<div style="padding:8px;color:var(--muted);font-size:12px">Loading folders...</div>';
+  treeEl.replaceChildren(el('div', { style: 'padding:8px;color:var(--muted);font-size:12px' }, 'Loading folders...'));
   let scope;
   try {
     scope = await bg('getScanScope');
   } catch (e) {
-    treeEl.innerHTML = '<div style="padding:8px;color:var(--danger);font-size:12px">Failed to load folders.</div>';
+    treeEl.replaceChildren(el('div', { style: 'padding:8px;color:var(--danger);font-size:12px' }, 'Failed to load folders.'));
     return;
   }
   renderScopeTree(scope);
@@ -1399,53 +1410,47 @@ function closeScanScopeModal() {
 function renderScopeTree(scope) {
   const excludedAccounts = new Set(scope.excludedAccountIds || []);
   const excludedFolders = new Set(scope.excludedFolderIds || []);
-  let html = '';
-  for (const account of scope.accounts || []) {
+  const accounts = (scope.accounts || []).map(account => {
     if (!account.scannable) {
-      html += `<div class="tree-account">
-        <label class="tree-account-label tree-account-disabled" title="${esc(accountTypeLabel(account.type))} accounts have no email subscriptions to scan">
-          <input type="checkbox" disabled>
-          <span class="tree-account-name">${esc(account.accountName)} (${esc(accountTypeLabel(account.type))} — can't be scanned)</span>
-        </label>
-      </div>`;
-      continue;
+      return el('div', { class: 'tree-account' },
+        el('label', {
+          class: 'tree-account-label tree-account-disabled',
+          title: `${accountTypeLabel(account.type)} accounts have no email subscriptions to scan`
+        },
+          el('input', { type: 'checkbox', disabled: true }),
+          el('span', { class: 'tree-account-name' }, `${account.accountName} (${accountTypeLabel(account.type)} — can't be scanned)`)));
     }
     const accountExcluded = excludedAccounts.has(account.accountId);
-    html += `<div class="tree-account" data-account-id="${esc(account.accountId)}">
-      <label class="tree-account-label">
-        <input type="checkbox" class="scope-account-check"${accountExcluded ? '' : ' checked'}>
-        <span class="tree-account-name">${esc(account.accountName)}</span>
-      </label>
-      ${renderScopeFolderNodes(account.folders, 0, accountExcluded, excludedFolders)}
-    </div>`;
-  }
-  document.getElementById('scope-tree').innerHTML = html;
+    return el('div', { class: 'tree-account', 'data-account-id': account.accountId },
+      el('label', { class: 'tree-account-label' },
+        el('input', { type: 'checkbox', class: 'scope-account-check', checked: !accountExcluded }),
+        el('span', { class: 'tree-account-name' }, account.accountName)),
+      renderScopeFolderNodes(account.folders, 0, accountExcluded, excludedFolders));
+  });
+  document.getElementById('scope-tree').replaceChildren(...accounts);
   for (const accountEl of document.querySelectorAll('#scope-tree .tree-account[data-account-id]')) {
     syncScopeAccountState(accountEl);
   }
 }
 
 function renderScopeFolderNodes(folders, depth, parentExcluded, excludedFolders) {
-  let html = '';
+  const nodes = [];
   for (const f of folders || []) {
     const hasChildren = f.subFolders && f.subFolders.length > 0;
     const checked = !parentExcluded && !excludedFolders.has(f.id);
-    html += `<div class="tree-node" style="padding-left:${depth * 16}px">
-      <label class="tree-folder-label">
-        ${hasChildren
-          ? `<span class="tree-toggle" data-folder-id="${esc(f.id)}">&#9656;</span>`
-          : '<span class="tree-spacer"></span>'}
-        <input type="checkbox" class="scope-folder-check" value="${esc(f.id)}"${checked ? ' checked' : ''}>
-        <span class="tree-folder-name">${esc(f.name)}</span>
-      </label>
-    </div>`;
+    nodes.push(el('div', { class: 'tree-node', style: `padding-left:${depth * 16}px` },
+      el('label', { class: 'tree-folder-label' },
+        hasChildren
+          ? el('span', { class: 'tree-toggle', 'data-folder-id': f.id }, '▸')
+          : el('span', { class: 'tree-spacer' }),
+        el('input', { type: 'checkbox', class: 'scope-folder-check', value: f.id, checked }),
+        el('span', { class: 'tree-folder-name' }, f.name))));
     if (hasChildren) {
-      html += `<div class="tree-subtree" data-parent-id="${esc(f.id)}" style="display:none">
-        ${renderScopeFolderNodes(f.subFolders, depth + 1, parentExcluded, excludedFolders)}
-      </div>`;
+      nodes.push(el('div', { class: 'tree-subtree', 'data-parent-id': f.id, style: 'display:none' },
+        renderScopeFolderNodes(f.subFolders, depth + 1, parentExcluded, excludedFolders)));
     }
   }
-  return html;
+  return nodes;
 }
 
 function syncScopeAccountState(accountEl) {
@@ -1655,7 +1660,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     if (!subtree) return;
     const open = subtree.style.display !== 'none';
     subtree.style.display = open ? 'none' : 'block';
-    toggle.innerHTML = open ? '&#9656;' : '&#9662;';
+    toggle.textContent = open ? '▸' : '▾';
   });
   refreshScanScopeLabel();
   document.getElementById('dry-run-toggle').addEventListener('change', (e) => {
@@ -1687,7 +1692,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     if (!subtree) return;
     const open = subtree.style.display !== 'none';
     subtree.style.display = open ? 'none' : 'block';
-    toggle.innerHTML = open ? '&#9656;' : '&#9662;';
+    toggle.textContent = open ? '▸' : '▾';
   });
 
   // New folder UI
