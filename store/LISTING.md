@@ -118,7 +118,7 @@ They show the real tab UI (unmodified `tab/tab.html`/`tab.css`/`tab.js`) rendere
 demo data (`.example` senders, `alex@example.net` recipient) — regenerate any time with
 `bash store/screenshots/make.sh` (needs chromium or nix).
 
-## Release notes (1.0.7)
+## Release notes (1.0.8)
 
 ```
 Initial public release.
@@ -129,7 +129,8 @@ Initial public release.
 • One-click (RFC 8058), email, and browser unsubscribe methods, with retry via any detected method
 • Cleanup actions to delete, move, or mark a sender's messages as Junk
 • Alias-aware grouping by sender and receiving address
-• Hardened against malicious senders: one-click endpoints validated (public https only), email content never rendered as HTML
+• Hardened against malicious senders: one-click endpoints validated (public https only), email content never rendered as HTML, and a warning before unsubscribing from senders without the standard unsubscribe header
+• Safe defaults: existing emails are kept on unsubscribe unless you choose otherwise
 • Optional dry-run mode to preview every action before it runs
 • Keep / dismiss / review-again workflow with a stats dashboard
 • Live message-level progress with pause and cancellation for scans and cleanup operations
@@ -142,7 +143,7 @@ Compatible with Thunderbird 128 and later.
 ## Notes to reviewers (paste into "Notes to Reviewer" on upload)
 
 ```
-Version 1.0.7 supersedes the pending 1.0 through 1.0.6 submissions. Please review 1.0.7 for the initial public release.
+Version 1.0.8 supersedes the pending 1.0 through 1.0.7 submissions. Please review 1.0.8 for the initial public release.
 
 Source is plain, unminified JavaScript with no build step and no third-party libraries — the uploaded XPI is the source (repo: https://github.com/SmarakNayak/thundersub).
 
