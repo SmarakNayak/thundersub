@@ -49,7 +49,8 @@ ATN allows limited HTML (`<b> <i> <em> <strong> <ul> <ol> <li> <blockquote> <cod
 <ul>
 <li>Reads the standard List-Unsubscribe header (RFC 2369) and supports one-click unsubscribe (RFC 8058).</li>
 <li>Also finds unsubscribe links embedded in email bodies (HTML and plain text) in 13 languages (English, Dutch, German, French, Spanish, Italian, Portuguese, Polish, Swedish, Danish, Norwegian, Finnish, and Russian) when senders don't play by the rules — while skipping quoted and forwarded content.</li>
-<li>Scans all accounts and folders, skipping Junk, Trash, Sent, Drafts, and Gmail's "All Mail" duplicates. Pause, resume, or stop long scans at any time.</li>
+<li>Scans all accounts and folders, skipping Junk, Trash, Sent, Drafts, and Gmail's "All Mail" duplicates. Pause, resume, or stop long scans at any time, with live message-by-message progress.</li>
+<li>Scan scope controls: untick whole accounts or folders (skip that giant archive backup), and skip known senders or entire domains (phish@spammer.com, spammer.com).</li>
 </ul>
 
 <b>Alias-aware</b>
@@ -59,10 +60,10 @@ Subscriptions are grouped by sender <i>and</i> receiving address: if a sender ma
 ThunderSub auto-picks the best available method: silent one-click POST, unsubscribe email (opens as a draft for review by default; auto-send is opt-in), or the sender's unsubscribe page in your browser. If a method fails, retry with any other detected one.
 
 <b>Cleanup included</b>
-Delete a sender's entire back catalog (to Trash, never permanently) or move it to any folder — with per-folder control over which copies are touched.
+Delete a sender's entire back catalog (to Trash, never permanently), move it to any folder — with per-folder control over which copies are touched — or mark phishing senders as junk to train your spam filter without ever contacting them.
 
-<b>Dry-run mode</b>
-Flip one toggle and every unsubscribe, delete, and move is simulated and reported without touching anything — explore the whole workflow risk-free, then switch it off when you're ready.
+<b>Safe by default</b>
+Existing emails are kept on unsubscribe unless you choose otherwise. Senders without the standard unsubscribe header get a warning before you act, and one-click requests are only ever sent to validated public https endpoints. Want to explore risk-free first? Dry-run mode simulates every unsubscribe, delete, and move and reports what would have happened.
 
 <b>Private by design</b>
 All data stays in Thunderbird's local storage. No cloud service, no account, no telemetry. The only network requests are the unsubscribe actions you explicitly trigger. A Full Reset wipes everything ThunderSub stored.
