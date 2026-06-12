@@ -364,6 +364,19 @@ const DISPOSE_LABELS = { delete: 'Deleted emails', move: 'Moved emails', keep: '
 // Full, human-readable description of how the unsubscribe will be performed,
 // including the destination website (for link methods) or address (for email).
 // Shown on hover so the modal stays uncluttered.
+// Native <select> popups size themselves to their widest option, and
+// unsubscribe URLs routinely run hundreds of characters. Keep the start
+// (scheme + domain) and the tail (where tracking tokens differ between
+// otherwise-identical URLs); the full URL of the selected method is shown
+// in the method-help line under the dropdown. Do not add title tooltips
+// to the options — confirmed buggy in Thunderbird 140 (tooltips render
+// detached from the cursor and linger after hovering away).
+function truncateMiddle(s, max = 64) {
+  const str = String(s || '');
+  if (str.length <= max) return str;
+  return `${str.slice(0, max - 16)}…${str.slice(-15)}`;
+}
+
 function methodDetail(method) {
   if (!method) return 'No unsubscribe method was detected for this sender.';
   switch (method.type) {
@@ -748,7 +761,8 @@ function openUnsubModal(senderEmail, recipientAddress, isRetry = false) {
 
   const availableMethods = getAvailableMethods(sub);
   const methodOptions = availableMethods.map((candidate, index) =>
-    el('option', { value: index }, `${METHOD_LABELS[candidate.type]}: ${candidate.url}`)
+    el('option', { value: index },
+      `${METHOD_LABELS[candidate.type]}: ${truncateMiddle(candidate.url)}`)
   );
 
   // Retry exposes every detected method while first-time unsubscribe shows the auto-best choice.
@@ -773,9 +787,9 @@ function openUnsubModal(senderEmail, recipientAddress, isRetry = false) {
   if (isRetry) {
     document.getElementById('modal-method-select').addEventListener('change', (e) => {
       modalSelectedMethod = e.target.value === 'auto' ? null : availableMethods[Number(e.target.value)];
-      const selected = modalSelectedMethod || method;
-      document.getElementById('modal-method-help').textContent = methodDetail(selected);
-      document.getElementById('modal-confirm').title = methodDetail(selected);
+      const selectedDetail = methodDetail(modalSelectedMethod || method);
+      document.getElementById('modal-method-help').textContent = selectedDetail;
+      document.getElementById('modal-confirm').title = selectedDetail;
     });
   }
 
