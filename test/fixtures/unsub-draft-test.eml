@@ -1,0 +1,9 @@
+From: Test Deals <deals@spammy.example>
+To: not-my-identity@example.net
+Subject: 50% off everything this week only
+Date: Fri, 12 Jun 2026 10:00:00 +1000
+Message-ID: <unsub-draft-test-1@spammy.example>
+List-Unsubscribe: <mailto:unsub-test@example.net?subject=unsubscribe>
+Content-Type: text/plain; charset=utf-8
+
+Huge savings inside. This is a ThunderSub test message.
