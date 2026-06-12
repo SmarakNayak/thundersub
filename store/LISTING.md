@@ -118,7 +118,7 @@ They show the real tab UI (unmodified `tab/tab.html`/`tab.css`/`tab.js`) rendere
 demo data (`.example` senders, `alex@example.net` recipient) — regenerate any time with
 `bash store/screenshots/make.sh` (needs chromium or nix).
 
-## Release notes (1.0.6)
+## Release notes (1.0.7)
 
 ```
 Initial public release.
@@ -129,6 +129,7 @@ Initial public release.
 • One-click (RFC 8058), email, and browser unsubscribe methods, with retry via any detected method
 • Cleanup actions to delete, move, or mark a sender's messages as Junk
 • Alias-aware grouping by sender and receiving address
+• Hardened against malicious senders: one-click endpoints validated (public https only), email content never rendered as HTML
 • Optional dry-run mode to preview every action before it runs
 • Keep / dismiss / review-again workflow with a stats dashboard
 • Live message-level progress with pause and cancellation for scans and cleanup operations
@@ -141,11 +142,11 @@ Compatible with Thunderbird 128 and later.
 ## Notes to reviewers (paste into "Notes to Reviewer" on upload)
 
 ```
-Version 1.0.6 supersedes the pending 1.0 through 1.0.5 submissions. Please review 1.0.6 for the initial public release.
+Version 1.0.7 supersedes the pending 1.0 through 1.0.6 submissions. Please review 1.0.7 for the initial public release.
 
 Source is plain, unminified JavaScript with no build step and no third-party libraries — the uploaded XPI is the source (repo: https://github.com/SmarakNayak/thundersub).
 
-The background runs as an ES module via a background page (background.html): background.js imports the localized unsubscribe-wording list from unsub-detect.js (embedded unsubscribe links in 13 languages) and the sender skip-pattern matcher from scan-scope.js. All matching is local regex matching; no translation service or network involvement.
+The background runs as an ES module via a background page (background.html): background.js imports the localized unsubscribe-wording list from unsub-detect.js (embedded unsubscribe links in 13 languages), the sender skip-pattern matcher from scan-scope.js, and the one-click URL safety gate from unsub-url.js. All matching is local regex matching; no translation service or network involvement.
 
 License: MPL-2.0. Portions of the unsubscribe detection and unsubscribe methods in background.js are adapted from BetterUnsubscribe by Luc Bennett (MPL-2.0, https://github.com/LucBennett/BetterUnsubscribe), with attribution in the file header and README. ThunderSub is an independent add-on with a different scope (whole-mailbox scanning, review queue, cleanup).
 
