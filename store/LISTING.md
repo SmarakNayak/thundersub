@@ -122,12 +122,18 @@ demo data (`.example` senders, `alex@example.net` recipient) — regenerate any 
 ## Release notes (1.0.9)
 
 ```
-Security and reliability update.
+Initial public release.
 
-• Browser and embedded unsubscribe links are now validated before opening, blocking non-web schemes and local/private-network destinations
-• UI URL attributes reject executable javascript:, data:, and vbscript: schemes
-• Mark-as-junk cleanup now routes messages by unique account ID, preventing incorrect moves when accounts share a display name
-• Added regression tests for unsubscribe URL validation and duplicate-name account junk routing
+• Scan all accounts and folders for subscriptions (List-Unsubscribe headers + embedded unsubscribe links in 13 languages)
+• Scan scope controls: choose which accounts and folders are scanned, and skip senders or whole domains
+• One-click (RFC 8058), email, and browser unsubscribe methods, with retry via any detected method
+• Cleanup actions to delete, move, or mark a sender's messages as Junk
+• Alias-aware grouping by sender and receiving address
+• Hardened against malicious senders: suspicious unsubscribe links are blocked before opening, one-click endpoints must use public HTTPS, email content is never rendered as HTML, and a warning appears before unsubscribing from senders without the standard unsubscribe header
+• Safe defaults: existing emails are kept on unsubscribe unless you choose otherwise
+• Optional dry-run mode to preview every action before it runs
+• Keep / dismiss / review-again workflow with a stats dashboard
+• Live message-level progress with pause and cancellation for scans and cleanup operations
 
 Compatible with Thunderbird 128 and later.
 ```
