@@ -126,7 +126,6 @@ Initial public release.
 
 • Scan all accounts and folders for subscriptions (List-Unsubscribe headers + embedded unsubscribe links in 13 languages)
 • Scan scope controls: choose which accounts and folders are scanned, and skip senders or whole domains
-• Fast scanning of large archive folders: message bodies are only parsed when unsubscribe wording is present
 • One-click (RFC 8058), email, and browser unsubscribe methods, with retry via any detected method
 • Cleanup actions to delete, move, or mark a sender's messages as Junk
 • Alias-aware grouping by sender and receiving address
