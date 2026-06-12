@@ -112,6 +112,7 @@ Ready to upload from `store/screenshots/`, in this order, with these captions:
 2. `02-unsubscribe-modal.png` — "Unsubscribe and clean up in one step: pick the method, then delete, move, or keep the sender's existing emails per folder."
 3. `03-scan-progress.png` — "Scanning every folder with live progress — pause, resume, or stop at any time without losing results."
 4. `04-unsubscribed.png` — "Track what you've unsubscribed from, retry with another method, or clean up leftover emails later."
+5. `05-scan-scope.png` — "Control the scan: choose accounts and folders, and skip senders or whole domains before they're ever read."
 
 They show the real tab UI (unmodified `tab/tab.html`/`tab.css`/`tab.js`) rendered with fictional
 demo data (`.example` senders, `alex@example.net` recipient) — regenerate any time with

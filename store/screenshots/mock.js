@@ -78,6 +78,7 @@ const SUBS = [
 
 const STATS = {
   emailsScanned: 48217,
+  subscriptionEmails: SUBS.reduce((sum, s) => sum + s.emailCount, 0),
   total: SUBS.length,
   pending: SUBS.filter(s => s.decision === 'pending').length,
   kept: SUBS.filter(s => s.decision === 'keep').length,
@@ -87,14 +88,40 @@ const STATS = {
 };
 
 const SCANNING = {
-  status: 'scanning', progress: 7, total: 18,
-  messagesScanned: 19438, sendersFound: 11,
-  message: 'Folder 7 of 18: Personal | Inbox',
+  status: 'scanning', progress: 19438, total: 48217,
+  folderProgress: 7, folderTotal: 18, currentFolder: 'Personal | Inbox',
+  messagesScanned: 19438, sendersFound: 11, subscriptionEmailsFound: 614,
+  message: 'Personal | Inbox',
   done: false, paused: false, stopped: false
+};
+
+// The scope shot shows a lived-in configuration (an excluded folder and
+// skip patterns); every other shot keeps the default "all folders" scope.
+const SCOPE = {
+  accounts: [
+    { accountId: 'a1', accountName: 'Personal', type: 'imap', scannable: true, folders: [
+      { id: 'p-inbox', name: 'Inbox', subFolders: [] },
+      { id: 'p-archive', name: 'Archive', subFolders: [
+        { id: 'p-archive-news', name: 'Newsletters', subFolders: [] },
+        { id: 'p-archive-receipts', name: 'Receipts', subFolders: [] }
+      ] },
+      { id: 'p-travel', name: 'Travel', subFolders: [] }
+    ] },
+    { accountId: 'a2', accountName: 'Work', type: 'imap', scannable: true, folders: [
+      { id: 'w-inbox', name: 'Inbox', subFolders: [] },
+      { id: 'w-projects', name: 'Projects', subFolders: [] }
+    ] },
+    { accountId: 'a3', accountName: 'News Feeds', type: 'rss', scannable: false, folders: [] }
+  ],
+  excludedAccountIds: [],
+  excludedFolderIds: SHOT === 'scope' ? ['p-archive-news'] : [],
+  skipSenders: SHOT === 'scope'
+    ? ['phish@scamletter.example', 'megadeals.example', '*@*.trackster.example'] : []
 };
 
 globalThis.browser = {
   runtime: {
+    onMessage: { addListener() {}, removeListener() {} },
     sendMessage(request) {
       switch (request.command) {
         case 'getDryRun': return Promise.resolve({ dryRun: false });
@@ -110,6 +137,7 @@ globalThis.browser = {
           ? SCANNING
           : { status: 'idle', progress: 0, total: 0, message: '', done: false });
         case 'scan': return Promise.resolve({ ok: true });
+        case 'getScanScope': return Promise.resolve(JSON.parse(JSON.stringify(SCOPE)));
         case 'getFolderTree': return Promise.resolve([]);
         default: return Promise.resolve({ ok: true });
       }
@@ -132,5 +160,10 @@ document.addEventListener('DOMContentLoaded', () => {
     clickWhenReady('.card[data-sender-email="deals@flightdeals.example"] .js-open-modal');
   } else if (SHOT === 'unsubscribed') {
     clickWhenReady('.filter-tab[data-filter="unsubscribed"]');
+  } else if (SHOT === 'scope') {
+    clickWhenReady('#scan-scope-btn');
+    // Once the modal's tree renders, expand Archive so the excluded
+    // Newsletters subfolder (and the account tri-state) is visible.
+    clickWhenReady('#scope-tree .tree-toggle[data-folder-id="p-archive"]');
   }
 });

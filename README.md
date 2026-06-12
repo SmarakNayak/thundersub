@@ -6,9 +6,11 @@ No cloud service. No account. No one reading your mail. Everything runs locally 
 
 ![ThunderSub dashboard — every subscription across your accounts in one place](store/screenshots/01-dashboard.png)
 
-| Unsubscribe & clean up in one step | Live scan progress | Track what you've left |
-|---|---|---|
-| ![Unsubscribe modal](store/screenshots/02-unsubscribe-modal.png) | ![Scan in progress](store/screenshots/03-scan-progress.png) | ![Unsubscribed view](store/screenshots/04-unsubscribed.png) |
+| Unsubscribe & clean up in one step | Live scan progress |
+|---|---|
+| ![Unsubscribe modal](store/screenshots/02-unsubscribe-modal.png) | ![Scan in progress](store/screenshots/03-scan-progress.png) |
+| **Choose exactly what gets scanned** | **Track what you've left** |
+| ![Scan scope modal](store/screenshots/05-scan-scope.png) | ![Unsubscribed view](store/screenshots/04-unsubscribed.png) |
 
 ---
 
@@ -32,6 +34,11 @@ Services that do this for webmail exist — and they do it by reading your email
 - Smart enough to skip quoted and forwarded content, so a newsletter your friend forwarded you doesn't show up as *your* subscription.
 - Scans every folder across your mail accounts — skipping News/NNTP, RSS/Feeds, Junk, Trash, Sent, Drafts, and Gmail's "All Mail" duplicates.
 - Long mailbox? Scans can be **paused, resumed, or stopped** at any time, and partial results are saved.
+
+### 🎯 Scan scope
+- **Pick your folders**: untick whole accounts or individual folders (that 20,000-message archive backup, say) in a checkbox tree. Everything new is included by default.
+- **Skip senders before they're even read**: list patterns one per line — `phish@spammer.com` (exact sender), `spammer.com` (domain + subdomains), `*@spammer.com` (domain only), `*@*.spammer.com` (subdomains only).
+- The active scope is always summarised under the Scan button, so a narrowed scan can't masquerade as a broken one.
 
 ### 📬 Alias-aware grouping
 ThunderSub doesn't just group by sender — it groups by **(sender, receiving address)**. If `news@example.com` mails both `you@work.com` and `you+shopping@gmail.com`, you'll see two cards, because those are two subscriptions that need two unsubscribes. Mailing-list and forwarded mail is resolved against your configured Thunderbird identities so cards land under the right address.

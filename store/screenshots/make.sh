@@ -32,3 +32,4 @@ shoot dashboard    01-dashboard.png
 shoot modal        02-unsubscribe-modal.png
 shoot scan         03-scan-progress.png
 shoot unsubscribed 04-unsubscribed.png
+shoot scope        05-scan-scope.png
