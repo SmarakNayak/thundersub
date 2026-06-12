@@ -85,17 +85,18 @@ Want to explore risk-free first? Flip the **Dry Run** toggle and every unsubscri
 
 ThunderSub requires **Thunderbird 128 or later**.
 
-### From the Thunderbird add-on store *(recommended)*
-Install from the [ThunderSub listing on addons.thunderbird.net](https://addons.thunderbird.net/en-US/thunderbird/addon/thundersub/),
-or search for **ThunderSub** in **≡ Menu → Add-ons and Themes**. You'll get automatic updates.
+ThunderSub **has not yet completed review**. Its
+[Thunderbird add-on details page](https://addons.thunderbird.net/en-US/thunderbird/addon/thundersub/)
+can be accessed directly, but it is not yet listed in the add-on gallery and cannot be found through
+Thunderbird's add-on search. For now, install it manually from the `.xpi` file:
 
-### From source
-```bash
-git clone https://github.com/SmarakNayak/thundersub.git
-cd thundersub
-bash build.sh   # → dist/thundersub-<version>.xpi
-```
-Then in Thunderbird: **≡ Menu → Add-ons and Themes** → gear icon → **Install Add-on From File…** and pick the `.xpi`. For development, load it temporarily via **Tools → Developer Tools → Debug Add-ons → Load Temporary Add-on** and selecting `manifest.json`.
+1. Open the [ThunderSub add-on listing](https://addons.thunderbird.net/en-US/thunderbird/addon/thundersub/) and download the `.xpi` file.
+2. In Thunderbird, open the **≡ menu** and select **Add-ons and Themes**.
+3. Select the **settings gear icon**, then **Install Add-on From File…**.
+4. Pick the downloaded `.xpi` file and confirm the installation.
+
+Because review is not yet complete, new versions may also need to be downloaded and installed
+manually.
 
 ## Quick start
 
