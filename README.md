@@ -98,6 +98,18 @@ Thunderbird's add-on search. For now, install it manually from the `.xpi` file:
 Because review is not yet complete, new versions may also need to be downloaded and installed
 manually.
 
+### Install from source
+
+```bash
+git clone https://github.com/SmarakNayak/thundersub.git
+cd thundersub
+bash build.sh   # creates dist/thundersub-<version>.xpi
+```
+
+Install the built `.xpi` using the same **Add-ons and Themes** → **settings gear icon** →
+**Install Add-on From File…** steps above. For development, load it temporarily through
+**Tools → Developer Tools → Debug Add-ons → Load Temporary Add-on**, then select `manifest.json`.
+
 ## Quick start
 
 1. Click the **ThunderSub** icon in the toolbar, then **Open ThunderSub**.
