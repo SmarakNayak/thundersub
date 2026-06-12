@@ -122,10 +122,18 @@ demo data (`.example` senders, `alex@example.net` recipient) — regenerate any 
 ## Release notes (1.0.10)
 
 ```
-Transparency and installation update.
+Initial public release.
 
-• Unsubscribe dialogs now display the selected method and full destination before an unsubscribe request is sent or a link is opened
-• Added clearer instructions for installing ThunderSub from the source repository while Thunderbird Add-ons review is pending
+• Scan all accounts and folders for subscriptions (List-Unsubscribe headers + embedded unsubscribe links in 13 languages)
+• Scan scope controls: choose which accounts and folders are scanned, and skip senders or whole domains
+• One-click (RFC 8058), email, and browser unsubscribe methods, with retry via any detected method
+• Cleanup actions to delete, move, or mark a sender's messages as Junk
+• Alias-aware grouping by sender and receiving address
+• Hardened against malicious senders: suspicious unsubscribe links are blocked before opening, one-click endpoints must use public HTTPS, email content is never rendered as HTML, and a warning appears before unsubscribing from senders without the standard unsubscribe header
+• Safe defaults: existing emails are kept on unsubscribe unless you choose otherwise
+• Optional dry-run mode to preview every action before it runs
+• Keep / dismiss / review-again workflow with a stats dashboard
+• Live message-level progress with pause and cancellation for scans and cleanup operations
 
 Compatible with Thunderbird 128 and later.
 ```
