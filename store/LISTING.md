@@ -119,13 +119,13 @@ They show the real tab UI (unmodified `tab/tab.html`/`tab.css`/`tab.js`) rendere
 demo data (`.example` senders, `alex@example.net` recipient) — regenerate any time with
 `bash store/screenshots/make.sh` (needs chromium or nix).
 
-## Release notes (1.0.10)
+## Release notes (1.0.11)
 
 ```
 Initial public release.
 
 • Scan all accounts and folders for subscriptions (List-Unsubscribe headers + embedded unsubscribe links in 13 languages)
-• Scan scope controls: choose which accounts and folders are scanned, and skip senders or whole domains
+• Scan scope controls: choose which accounts and folders are scanned, and filter From or To addresses and whole domains
 • One-click (RFC 8058), email, and browser unsubscribe methods, with retry via any detected method
 • Cleanup actions to delete, move, or mark a sender's messages as Junk
 • Alias-aware grouping by sender and receiving address
@@ -143,7 +143,7 @@ Compatible with Thunderbird 128 and later.
 ## Notes to reviewers (paste into "Notes to Reviewer" on upload)
 
 ```
-Version 1.0.10 supersedes the pending 1.0 through 1.0.9 submissions. Please review 1.0.10 for the initial public release.
+Version 1.0.11 supersedes the pending 1.0 through 1.0.10 submissions. Please review 1.0.11 for the initial public release.
 
 Source is plain, unminified JavaScript with no build step and no third-party libraries — the uploaded XPI is the source (repo: https://github.com/SmarakNayak/thundersub).
 

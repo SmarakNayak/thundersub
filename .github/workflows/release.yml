@@ -29,5 +29,5 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           gh release create "$GITHUB_REF_NAME" dist/*.xpi \
-            --title "ThunderSub ${GITHUB_REF_NAME#v}" --generate-notes \
+            --title "ThunderSub ${GITHUB_REF_NAME#v}" --notes-file RELEASE_NOTES.md \
           || gh release upload "$GITHUB_REF_NAME" dist/*.xpi --clobber

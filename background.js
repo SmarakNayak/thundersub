@@ -7,7 +7,7 @@
  * https://github.com/LucBennett/BetterUnsubscribe */
 
 import { UNSUB_REGEX, mayContainUnsubWording } from './unsub-detect.js';
-import { buildSenderSkipMatcher } from './scan-scope.js';
+import { buildAddressSkipMatcher } from './scan-scope.js';
 import { oneClickUrlBlockReason, browserUrlBlockReason } from './unsub-url.js';
 import { junkFolderForGroup } from './junk-routing.js';
 
@@ -489,15 +489,18 @@ async function collectAllFolders(account) {
 //
 // Folder exclusions are stored as ids — accounts excluded wholesale plus
 // individually unchecked folders — so newly created accounts and folders are
-// scanned by default. Sender skip patterns are exact addresses or *@domain
+// scanned by default. From/To skip patterns are exact addresses or *@domain
 // (see scan-scope.js).
 
 async function getScanScopeSettings() {
-  const result = await browser.storage.local.get(['scanExcludedAccountIds', 'scanExcludedFolderIds', 'scanSkipSenders']);
+  const result = await browser.storage.local.get([
+    'scanExcludedAccountIds', 'scanExcludedFolderIds', 'scanSkipSenders', 'scanSkipRecipients'
+  ]);
   return {
     excludedAccountIds: result.scanExcludedAccountIds || [],
     excludedFolderIds: result.scanExcludedFolderIds || [],
-    skipSenders: result.scanSkipSenders || []
+    skipSenders: result.scanSkipSenders || [],
+    skipRecipients: result.scanSkipRecipients || []
   };
 }
 
@@ -507,11 +510,12 @@ function normalizeStringList(values) {
     .filter(Boolean))];
 }
 
-async function setScanScope({ excludedAccountIds, excludedFolderIds, skipSenders }) {
+async function setScanScope({ excludedAccountIds, excludedFolderIds, skipSenders, skipRecipients }) {
   await browser.storage.local.set({
     scanExcludedAccountIds: normalizeStringList(excludedAccountIds),
     scanExcludedFolderIds: normalizeStringList(excludedFolderIds),
-    scanSkipSenders: normalizeStringList(skipSenders).map(p => p.toLowerCase())
+    scanSkipSenders: normalizeStringList(skipSenders).map(p => p.toLowerCase()),
+    scanSkipRecipients: normalizeStringList(skipRecipients).map(p => p.toLowerCase())
   });
   return { ok: true };
 }
@@ -808,12 +812,13 @@ async function runScan() {
   console.log('[ThunderSub] Scan started');
 
   try {
-    const { excludedAccountIds, excludedFolderIds, skipSenders } = await getScanScopeSettings();
+    const { excludedAccountIds, excludedFolderIds, skipSenders, skipRecipients } = await getScanScopeSettings();
     const excludedAccounts = new Set(excludedAccountIds);
     const excludedFolders = new Set(excludedFolderIds);
-    const skipsSender = buildSenderSkipMatcher(skipSenders);
-    if (excludedAccounts.size > 0 || excludedFolders.size > 0 || skipSenders.length > 0) {
-      console.log(`[ThunderSub] Scan scope: excluding ${excludedAccounts.size} account(s) and ${excludedFolders.size} folder(s), skipping ${skipSenders.length} sender pattern(s)`);
+    const skipsSender = buildAddressSkipMatcher(skipSenders);
+    const skipsRecipient = buildAddressSkipMatcher(skipRecipients);
+    if (excludedAccounts.size > 0 || excludedFolders.size > 0 || skipSenders.length > 0 || skipRecipients.length > 0) {
+      console.log(`[ThunderSub] Scan scope: excluding ${excludedAccounts.size} account(s) and ${excludedFolders.size} folder(s), skipping ${skipSenders.length} From pattern(s) and ${skipRecipients.length} To pattern(s)`);
     }
 
     const accounts = await browser.accounts.list();
@@ -898,6 +903,10 @@ async function runScan() {
                 browser.messages.getFull(m.id), MESSAGE_FETCH_TIMEOUT_MS, `getFull(${m.id})`);
               if (!full || !full.headers) continue;
 
+              const recipient = parseRecipientAddress(full, accountAddresses);
+              const recipientAddress = recipient.address;
+              if (skipsRecipient && recipientAddress && skipsRecipient(recipientAddress)) continue;
+
               const listUnsub = full.headers['list-unsubscribe'];
               let urls = [];
               let oneClick = false;
@@ -918,8 +927,6 @@ async function runScan() {
 
               if (!email) continue;
 
-              const recipient = parseRecipientAddress(full, accountAddresses);
-              const recipientAddress = recipient.address;
               const key = `${email}|${recipientAddress}`;
 
               if (!subs[key]) {

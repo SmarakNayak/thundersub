@@ -157,9 +157,12 @@
     <h3>Scan Scope</h3>
     <h4>Accounts &amp; folders</h4>
     <div id="scope-tree" class="folder-tree scope-tree"></div>
-    <h4 class="scope-senders-title">Skip senders</h4>
-    <textarea id="scope-skip-senders" class="skip-senders-input" rows="4" spellcheck="false" placeholder="phish@spammer1.com&#10;spammer2.com&#10;*@spammer3.com&#10;*@*.spammer4.com"></textarea>
-    <div class="scope-hint">One per line — phish@spammer.com (exact sender), spammer.com (domain + subdomains), *@spammer.com (domain only), *@*.spammer.com (subdomains only).</div>
+    <h4 class="scope-addresses-title">From filter</h4>
+    <textarea id="scope-skip-senders" class="scope-addresses-input" rows="4" spellcheck="false" placeholder="phish@spammer1.com&#10;spammer2.com&#10;*@spammer3.com&#10;*@*.spammer4.com"></textarea>
+    <div class="scope-hint">Skip messages from these addresses or domains. One pattern per line.</div>
+    <h4 class="scope-addresses-title">To filter</h4>
+    <textarea id="scope-skip-recipients" class="scope-addresses-input" rows="4" spellcheck="false" placeholder="old-address@example.com&#10;example.org&#10;*@example.net"></textarea>
+    <div class="scope-hint">Skip messages received by these addresses or domains. Patterns support exact addresses, domains + subdomains, *@domain, and *@*.domain.</div>
     <div class="modal-footer">
       <button id="scope-cancel" class="btn btn-muted">Cancel</button>
       <button id="scope-save" class="btn btn-accent">Save</button>

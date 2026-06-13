@@ -1,7 +1,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { buildSenderSkipMatcher, isValidSenderPattern } from '../scan-scope.js';
+import { buildAddressSkipMatcher, buildSenderSkipMatcher, isValidSenderPattern } from '../scan-scope.js';
+
+test('keeps the original sender matcher name as an alias', () => {
+  assert.equal(buildSenderSkipMatcher, buildAddressSkipMatcher);
+});
 
 test('returns null when there is nothing to match', () => {
   assert.equal(buildSenderSkipMatcher([]), null);

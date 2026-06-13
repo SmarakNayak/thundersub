@@ -116,7 +116,8 @@ const SCOPE = {
   excludedAccountIds: [],
   excludedFolderIds: SHOT === 'scope' ? ['p-archive-news'] : [],
   skipSenders: SHOT === 'scope'
-    ? ['phish@scamletter.example', 'megadeals.example', '*@*.trackster.example'] : []
+    ? ['phish@scamletter.example', 'megadeals.example', '*@*.trackster.example'] : [],
+  skipRecipients: SHOT === 'scope' ? ['old-address@example.net'] : []
 };
 
 globalThis.browser = {

@@ -1437,6 +1437,7 @@ async function openScanScopeModal() {
   }
   renderScopeTree(scope);
   document.getElementById('scope-skip-senders').value = (scope.skipSenders || []).join('\n');
+  document.getElementById('scope-skip-recipients').value = (scope.skipRecipients || []).join('\n');
 }
 
 function closeScanScopeModal() {
@@ -1519,7 +1520,7 @@ function onScopeTreeChange(e) {
 
 // Must stay in sync with SENDER_PATTERN_REGEX in scan-scope.js (this file is
 // not a module, so it cannot import it).
-const SCOPE_SENDER_PATTERN = /^((\*|[^\s@*]*)@[^\s@*]+|\*?@\*\.[^\s@*]+|[^\s@*]+\.[^\s@*]+)$/;
+const SCOPE_ADDRESS_PATTERN = /^((\*|[^\s@*]*)@[^\s@*]+|\*?@\*\.[^\s@*]+|[^\s@*]+\.[^\s@*]+)$/;
 
 async function saveScanScope() {
   const excludedAccountIds = [];
@@ -1538,14 +1539,16 @@ async function saveScanScope() {
 
   const skipSenders = document.getElementById('scope-skip-senders').value
     .split('\n').map(line => line.trim()).filter(Boolean);
-  const invalid = skipSenders.find(p => !SCOPE_SENDER_PATTERN.test(p));
+  const skipRecipients = document.getElementById('scope-skip-recipients').value
+    .split('\n').map(line => line.trim()).filter(Boolean);
+  const invalid = [...skipSenders, ...skipRecipients].find(p => !SCOPE_ADDRESS_PATTERN.test(p));
   if (invalid) {
-    toast(`Invalid sender pattern "${invalid}" — use name@domain.com, domain.com, *@domain.com, or *@*.domain.com`, 'error');
+    toast(`Invalid address pattern "${invalid}" — use name@domain.com, domain.com, *@domain.com, or *@*.domain.com`, 'error');
     return;
   }
 
   try {
-    await bg('setScanScope', { excludedAccountIds, excludedFolderIds, skipSenders });
+    await bg('setScanScope', { excludedAccountIds, excludedFolderIds, skipSenders, skipRecipients });
     closeScanScopeModal();
     toast('Scan scope saved', 'success');
     refreshScanScopeLabel();
@@ -1573,9 +1576,11 @@ async function refreshScanScopeLabel() {
       if (!account.scannable) continue;
       countFolders(account.folders, excludedAccounts.has(account.accountId));
     }
-    const skipped = (scope.skipSenders || []).length;
+    const skippedFrom = (scope.skipSenders || []).length;
+    const skippedTo = (scope.skipRecipients || []).length;
     const parts = [excluded > 0 ? `${total - excluded}/${total} folders` : 'all folders'];
-    if (skipped > 0) parts.push(`${skipped} sender${skipped === 1 ? '' : 's'} skipped`);
+    if (skippedFrom > 0) parts.push(`${skippedFrom} From filter${skippedFrom === 1 ? '' : 's'}`);
+    if (skippedTo > 0) parts.push(`${skippedTo} To filter${skippedTo === 1 ? '' : 's'}`);
     btn.textContent = `Scan scope: ${parts.join(' · ')}`;
     btn.title = btn.textContent;
   } catch (e) { /* keep the default label */ }

@@ -2,8 +2,8 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-// Sender skip patterns for the scan scope, matched case-insensitively
-// against the message's From address:
+// Address skip patterns for the scan scope, matched case-insensitively
+// against a message's From or resolved To address:
 //   spammer.com         the domain and all of its subdomains
 //   phish@spammer.com   exact address
 //   *@spammer.com       that domain only ("@spammer.com" works too)
@@ -22,9 +22,9 @@ export function isValidSenderPattern(pattern) {
   return SENDER_PATTERN_REGEX.test(String(pattern || '').trim());
 }
 
-// Returns a matcher function over lowercased sender addresses, or null when
+// Returns a matcher function over lowercased email addresses, or null when
 // no usable patterns exist so callers can skip the check entirely.
-export function buildSenderSkipMatcher(patterns) {
+export function buildAddressSkipMatcher(patterns) {
   const emails = new Set();
   const domains = new Set();           // matches the domain exactly
   const subdomainSuffixes = new Set(); // matches below the domain only
@@ -62,3 +62,7 @@ export function buildSenderSkipMatcher(patterns) {
     }
   };
 }
+
+// Kept for compatibility with callers/tests using the original sender-specific
+// name.
+export const buildSenderSkipMatcher = buildAddressSkipMatcher;

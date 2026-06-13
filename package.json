@@ -1,6 +1,6 @@
 {
   "name": "thundersub",
-  "version": "1.0.10",
+  "version": "1.0.11",
   "description": "Manage email subscriptions in Thunderbird — scan, unsubscribe, and clean up.",
   "private": true,
   "type": "module",
