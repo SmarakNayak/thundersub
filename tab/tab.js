@@ -150,13 +150,14 @@ function renderActivityQueue() {
     return el('div', { class: 'activity-item js-open-activity', 'data-job-id': job.id, title: 'View activity details' },
       el('div', { class: 'activity-row' },
         el('div', { class: 'activity-name', title: activityJobLabel(job) }, activityJobLabel(job)),
-        el('div', { class: `activity-status ${status.className}` }, status.label),
-        (job.status === 'complete' || job.status === 'failed' || job.status === 'cancelled') && el('button', {
-          class: 'activity-dismiss js-dismiss-activity',
-          title: 'Dismiss activity item',
-          'aria-label': 'Dismiss activity item',
-          'data-job-id': job.id
-        }, 'x')),
+        el('div', { class: 'activity-actions' },
+          el('div', { class: `activity-status ${status.className}` }, status.label),
+          (job.status === 'complete' || job.status === 'failed' || job.status === 'cancelled') && el('button', {
+            class: 'activity-dismiss js-dismiss-activity',
+            title: 'Dismiss activity item',
+            'aria-label': 'Dismiss activity item',
+            'data-job-id': job.id
+          }, 'x'))),
       el('div', { class: 'activity-detail', title: job.message || '' }, job.message || 'Waiting...'),
       (job.status === 'queued' || job.status === 'running') && el('div', { class: 'activity-progress-track' },
         el('div', { class: 'activity-progress-bar', style: `width:${Math.max(0, Math.min(100, job.progress || 0))}%` })));

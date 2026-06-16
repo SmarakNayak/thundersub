@@ -89,6 +89,7 @@ body{display:flex;overflow:hidden}
 .activity-item:hover{border-color:rgba(99,102,241,.55)}
 .activity-row{display:flex;align-items:center;justify-content:space-between;gap:6px;margin-bottom:4px}
 .activity-name{font-size:12px;font-weight:700;color:var(--text);min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.activity-actions{display:flex;align-items:center;justify-content:flex-end;gap:5px;min-width:82px;flex-shrink:0}
 .activity-status{font-size:10px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.04em;white-space:nowrap}
 .activity-status.running{color:var(--info)}
 .activity-status.done{color:var(--success)}
