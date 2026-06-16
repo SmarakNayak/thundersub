@@ -9,6 +9,7 @@ Initial public release.
 - Safe defaults that keep existing emails unless you choose otherwise
 - Optional dry-run mode to preview actions
 - Keep, dismiss, and review-again workflow with a stats dashboard
+- Background Activity stack for unsubscribe and cleanup jobs, with progress, details, cancellation, and manual dismiss
 - Live message-level progress with pause and cancellation for scans and cleanup operations
 
 Compatible with Thunderbird 128 and later.
