@@ -311,7 +311,7 @@ label.modal-addr-row:hover{background:rgba(0,0,0,.3)}
 #toast-container{position:fixed;bottom:20px;right:20px;display:flex;flex-direction:column;gap:8px;z-index:9999}
 .toast{
   padding:10px 16px;border-radius:8px;font-size:13px;font-weight:500;
-  animation:slideIn .2s ease;min-width:220px;max-width:360px;
+  animation:slideIn .2s ease;width:340px;max-width:calc(100vw - 40px);
   box-shadow:0 4px 15px rgba(0,0,0,.4);
 }
 .toast-success{background:#166534;border:1px solid #22c55e;color:#bbf7d0}
