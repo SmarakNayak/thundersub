@@ -1630,7 +1630,7 @@ async function processActivityJob(job) {
   if (job.cancelRequested && job.mode === 'cleanup') {
     outcomeMessage = `Cleanup completed for ${name} before cancellation took effect`;
     outcomeType = 'info';
-  } else if (job.cancelRequested && cleanupRequested) {
+  } else if (job.cancelRequested && job.mode !== 'cleanup' && cleanupRequested) {
     outcomeMessage = `Unsubscribed from ${name}; cleanup completed before cancellation took effect`;
     outcomeType = 'info';
   } else if (job.cancelRequested) {
