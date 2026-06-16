@@ -14,6 +14,10 @@ let scanInProgress = false;
 let currentRecipientFilter = '';
 let currentSort = 'recent';
 const SHOW_DETECTION_UI = false;
+let activityQueue = [];
+let activeActivityJob = null;
+let recentActivityJobs = [];
+let nextActivityJobId = 1;
 
 // The scan button reads "Rescan Emails" once a scan has produced data, else
 // "Scan Emails". Only touches the label while the button is idle so it never
@@ -94,6 +98,122 @@ function createTrace(label, details = {}) {
       }
     }
   };
+}
+
+function activityJobLabel(job) {
+  const sub = subsCache.find(s => s.senderEmail === job.senderEmail && s.recipientAddress === job.recipientAddress);
+  return sub?.senderName || job.senderEmail;
+}
+
+function isActivityJobFor(job, sub) {
+  return job?.senderEmail === sub.senderEmail && job?.recipientAddress === (sub.recipientAddress || '');
+}
+
+function isSubscriptionProcessing(sub) {
+  return isActivityJobFor(activeActivityJob, sub) || activityQueue.some(job => isActivityJobFor(job, sub));
+}
+
+function syncProcessingFlags() {
+  for (const sub of subsCache) sub.processing = isSubscriptionProcessing(sub);
+}
+
+function renderActivityQueue() {
+  const section = document.getElementById('activity-section');
+  const list = document.getElementById('activity-list');
+  if (!section || !list) return;
+
+  const jobs = [
+    ...(activeActivityJob ? [activeActivityJob] : []),
+    ...activityQueue,
+    ...recentActivityJobs,
+  ];
+  section.classList.toggle('open', jobs.length > 0);
+  list.replaceChildren(...jobs.map(job => {
+    const statusClass = job.status === 'failed' ? 'error' : (job.status === 'complete' ? 'done' : 'running');
+    const statusLabel = job.status === 'queued' ? 'Queued' :
+      job.status === 'running' ? 'Running' :
+      job.status === 'complete' ? 'Done' : 'Error';
+    return el('div', { class: 'activity-item' },
+      el('div', { class: 'activity-row' },
+        el('div', { class: 'activity-name', title: activityJobLabel(job) }, activityJobLabel(job)),
+        el('div', { class: `activity-status ${statusClass}` }, statusLabel),
+        (job.status === 'complete' || job.status === 'failed') && el('button', {
+          class: 'activity-dismiss js-dismiss-activity',
+          title: 'Dismiss activity item',
+          'aria-label': 'Dismiss activity item',
+          'data-job-id': job.id
+        }, 'x')),
+      el('div', { class: 'activity-detail', title: job.message || '' }, job.message || 'Waiting...'),
+      (job.status === 'queued' || job.status === 'running') && el('div', { class: 'activity-progress-track' },
+        el('div', { class: 'activity-progress-bar', style: `width:${Math.max(0, Math.min(100, job.progress || 0))}%` })));
+  }));
+}
+
+function setActivityJobProgress(job, message, progress) {
+  job.message = message;
+  if (Number.isFinite(progress)) job.progress = progress;
+  renderActivityQueue();
+}
+
+function clearProcessingFlag(job) {
+  const sub = subsCache.find(s => s.senderEmail === job.senderEmail && s.recipientAddress === job.recipientAddress);
+  if (sub) {
+    sub.processing = false;
+    renderFilteredCards();
+  }
+}
+
+function enqueueActivityJob(job) {
+  const queuedJob = {
+    id: nextActivityJobId++,
+    status: 'queued',
+    progress: 0,
+    message: 'Waiting...',
+    ...job
+  };
+  const sub = subsCache.find(s => s.senderEmail === queuedJob.senderEmail && s.recipientAddress === queuedJob.recipientAddress);
+  if (sub && isSubscriptionProcessing(sub)) {
+    toast('That subscription is already processing', 'info');
+    return;
+  }
+  if (sub) {
+    sub.processing = true;
+    renderFilteredCards();
+  }
+  activityQueue.push(queuedJob);
+  renderActivityQueue();
+  runNextActivityJob();
+}
+
+async function runNextActivityJob() {
+  if (activeActivityJob || activityQueue.length === 0) return;
+  activeActivityJob = activityQueue.shift();
+  activeActivityJob.status = 'running';
+  renderActivityQueue();
+  try {
+    await processActivityJob(activeActivityJob);
+  } catch (e) {
+    activeActivityJob.status = 'failed';
+    setActivityJobProgress(activeActivityJob, `Failed: ${e.message || e}`, 100);
+    clearProcessingFlag(activeActivityJob);
+  }
+  const finishedJob = activeActivityJob;
+  activeActivityJob = null;
+  recentActivityJobs = [finishedJob, ...recentActivityJobs];
+  renderActivityQueue();
+  runNextActivityJob();
+}
+
+function dismissActivityJob(jobId) {
+  recentActivityJobs = recentActivityJobs.filter(job => job.id !== jobId);
+  renderActivityQueue();
+}
+
+function clearActivityQueue() {
+  activityQueue = [];
+  activeActivityJob = null;
+  recentActivityJobs = [];
+  renderActivityQueue();
 }
 
 function avatarColor(email) {
@@ -187,6 +307,7 @@ async function doFullReset() {
     document.getElementById('pause-btn').textContent = 'Pause';
     document.getElementById('stop-btn').disabled = false;
     document.getElementById('stop-btn').textContent = 'Stop';
+    clearActivityQueue();
 
     currentFilter = 'pending';
     document.querySelectorAll('.filter-tab').forEach(t => t.classList.remove('active'));
@@ -296,6 +417,7 @@ async function loadSubs(filter) {
   try {
     const subs = await bg('getSubscriptions', { filter: filter === 'all' ? null : filter });
     subsCache = subs;
+    syncProcessingFlags();
     refreshRecipientFilter();
     renderFilteredCards();
   } catch (e) {
@@ -466,6 +588,10 @@ function buildActions(s) {
   const reviewTitle = 'Move this subscription back to Pending for review.';
   const btn = (cls, label, title) => el('button', { class: cls, title, ...attrs }, label);
 
+  if (s.processing) {
+    return [el('span', { class: 'action-note' }, 'Processing in Activity...')];
+  }
+
   if (s.decision === 'keep') {
     return [
       btn('btn btn-view js-view', 'View'),
@@ -503,6 +629,7 @@ function buildCard(s) {
 
   // Badges
   const badges = [el('span', { class: 'badge badge-blue' }, `${s.emailCount} emails`)];
+  if (s.processing) badges.push(el('span', { class: 'badge badge-processing' }, 'Processing'));
   if (s.decision === 'keep') badges.push(el('span', { class: 'badge badge-kept' }, 'Kept'));
   if (s.decision === 'unsubscribed') {
     badges.push(el('span', { class: 'badge badge-unsub' }, 'Unsubscribed'));
@@ -514,7 +641,7 @@ function buildCard(s) {
   const dismissable = s.decision === 'unsubscribed' || s.decision === 'error';
   const attrs = { 'data-sender-email': s.senderEmail, 'data-recipient-address': s.recipientAddress || '' };
 
-  return el('div', { class: 'card', id: `card-${id}`, ...attrs },
+  return el('div', { class: `card${s.processing ? ' processing' : ''}`, id: `card-${id}`, ...attrs },
     el('div', { class: 'card-body' },
       dismissable && el('button', {
         class: 'card-dismiss js-dismiss',
@@ -722,12 +849,15 @@ function cleanupProgressPercent(phase, current, total) {
 }
 
 browser.runtime.onMessage.addListener(request => {
-  if (request.command !== 'cleanupProgress' || request.traceId !== modalOperationTraceId) return;
-  showModalProgress(
-    request.traceId,
-    request.message || 'Working...',
-    cleanupProgressPercent(request.phase, request.current, request.total)
-  );
+  if (request.command !== 'cleanupProgress') return;
+  const percent = cleanupProgressPercent(request.phase, request.current, request.total);
+  if (request.traceId === modalOperationTraceId) {
+    showModalProgress(request.traceId, request.message || 'Working...', percent);
+    return;
+  }
+  if (activeActivityJob?.traceId === request.traceId) {
+    setActivityJobProgress(activeActivityJob, request.message || 'Working...', percent);
+  }
 });
 
 function modalConfirmLabel() {
@@ -1060,8 +1190,8 @@ function displayFolderPath(path, fallback) {
   return String(path || fallback || '').replace(/^\/+/, '');
 }
 
-function dryRunSummary(sub, method, dispose, selectedFolders, destination) {
-  if (modalMode === 'cleanup') {
+function dryRunSummary(sub, method, dispose, selectedFolders, destination, mode = modalMode) {
+  if (mode === 'cleanup') {
     if (dispose === 'delete') return `Dry run: would delete ${selectedMessageCount(sub, selectedFolders)} emails. No changes made.`;
     if (dispose === 'move') {
       let summary = `Dry run: would move ${selectedMessageCount(sub, selectedFolders)} emails`;
@@ -1103,13 +1233,6 @@ async function doUnsubscribeConfirm() {
   const selectedFolders = getSelectedFolders();
   const method = modalSelectedMethod || getBestMethod(sub);
   const destination = dispose === 'move' ? getSelectedDestination() : null;
-  const trace = createTrace('unsubscribe', {
-    mode: modalMode,
-    method: method?.type || 'none',
-    dispose,
-    selectedFolders: selectedFolders.length,
-    selectedMessages: selectedMessageCount(sub, selectedFolders)
-  });
 
   // Validate the move destination before anything fires — especially the
   // unsubscribe request, which cannot be taken back.
@@ -1124,10 +1247,39 @@ async function doUnsubscribeConfirm() {
     }
   }
 
-  const confirmBtn = document.getElementById('modal-confirm');
-  confirmBtn.disabled = true;
-  confirmBtn.textContent = 'Checking...';
-  showModalProgress(trace.id, modalMode === 'cleanup' ? 'Preparing cleanup...' : 'Sending unsubscribe request...', 5);
+  enqueueActivityJob({
+    senderEmail: modalSenderEmail,
+    recipientAddress: modalRecipientAddress,
+    mode: modalMode,
+    method,
+    dispose,
+    selectedFolders,
+    destination,
+    selectedMessages: selectedMessageCount(sub, selectedFolders)
+  });
+  closeUnsubModal();
+}
+
+async function processActivityJob(job) {
+  const sub = subsCache.find(s => s.senderEmail === job.senderEmail && s.recipientAddress === job.recipientAddress);
+  if (!sub) {
+    job.status = 'failed';
+    job.message = 'Subscription is no longer available';
+    job.progress = 100;
+    renderActivityQueue();
+    return;
+  }
+
+  const { method, dispose, selectedFolders, destination } = job;
+  const trace = createTrace('unsubscribe', {
+    mode: job.mode,
+    method: method?.type || 'none',
+    dispose,
+    selectedFolders: selectedFolders.length,
+    selectedMessages: job.selectedMessages
+  });
+  job.traceId = trace.id;
+  setActivityJobProgress(job, job.mode === 'cleanup' ? 'Preparing cleanup...' : 'Sending unsubscribe request...', 5);
 
   try {
     const result = await trace.bg('getDryRun');
@@ -1138,29 +1290,22 @@ async function doUnsubscribeConfirm() {
     document.getElementById('dry-run-toggle').checked = false;
   }
 
-  if (modalCancelRequested) {
-    finishModalCancellation(trace);
-    return;
-  }
-
   if (dryRun) {
-    toast(dryRunSummary(sub, method, dispose, selectedFolders, destination), 'info');
-    confirmBtn.disabled = false;
-    confirmBtn.textContent = modalConfirmLabel();
-    resetModalProgress();
-    closeUnsubModal();
+    const summary = dryRunSummary(sub, method, dispose, selectedFolders, destination, job.mode);
+    toast(summary, 'info');
+    job.status = 'complete';
+    setActivityJobProgress(job, summary, 100);
+    clearProcessingFlag(job);
     trace.log('unsubscribe:dry-run-complete');
     return;
   }
 
-  confirmBtn.textContent = 'Unsubscribing...';
-
   // Fire unsubscribe
   let ok = false;
   let unsubscribeResult = null;
-  if (modalMode === 'cleanup') {
+  if (job.mode === 'cleanup') {
     ok = true;
-    confirmBtn.textContent = 'Applying...';
+    setActivityJobProgress(job, 'Applying cleanup...', 10);
   } else if (method) {
     try {
       if (method.type === 'oneclick') {
@@ -1168,7 +1313,7 @@ async function doUnsubscribeConfirm() {
         unsubscribeResult = r;
         ok = r.ok;
       } else if (method.type === 'mail') {
-        unsubscribeResult = await trace.bg('unsubMail', { url: method.url, recipientAddress: modalRecipientAddress });
+        unsubscribeResult = await trace.bg('unsubMail', { url: method.url, recipientAddress: job.recipientAddress });
         ok = true;
       } else if (method.type === 'embedded') {
         unsubscribeResult = await trace.bg('unsubEmbedded', { url: method.url });
@@ -1182,89 +1327,71 @@ async function doUnsubscribeConfirm() {
     }
   }
 
-  if (modalCancelRequested) {
-    if (modalMode !== 'cleanup' && ok) {
-      await trace.bg('decide', {
-        senderEmail: modalSenderEmail,
-        recipientAddress: modalRecipientAddress,
-        decision: 'unsubscribed',
-        dispose: null
-      });
-      sub.dispose = null;
-      updateCachedDecision(sub, 'unsubscribed');
-    }
-    finishModalCancellation(trace, ok && modalMode !== 'cleanup'
-      ? 'Unsubscribed; remaining actions cancelled'
-      : 'Operation cancelled');
-    return;
-  }
-
   if (!ok) {
     const message = method ? 'Unsubscribe request failed' : 'No unsubscribe method is available';
     await trace.bg('decide', {
-      senderEmail: modalSenderEmail,
-      recipientAddress: modalRecipientAddress,
+      senderEmail: job.senderEmail,
+      recipientAddress: job.recipientAddress,
       decision: 'error',
       dispose,
       error: errorPayload('unsubscribe', message)
     });
     updateDecisionStats(sub.decision, 'error');
     sub.decision = 'error';
+    sub.processing = false;
     toast(message, 'error');
-    confirmBtn.disabled = false;
-    confirmBtn.textContent = modalConfirmLabel();
     showErrorsView();
     trace.log('unsubscribe:failed', undefined, { stage: 'unsubscribe' });
-    resetModalProgress();
-    closeUnsubModal();
+    job.status = 'failed';
+    setActivityJobProgress(job, message, 100);
     return;
   }
 
   // Outcome of the unsubscribe step itself, independent of cleanup: a real
   // unsubscribe → unsubscribed; a standalone cleanup keeps the prior decision.
-  const outcomeDecision = modalMode === 'cleanup' ? (sub.decision || 'unsubscribed') : 'unsubscribed';
+  const outcomeDecision = job.mode === 'cleanup' ? (sub.decision || 'unsubscribed') : 'unsubscribed';
 
   // A cleanup (delete/move) failure is NOT an unsubscribe failure — the
   // unsubscribe already succeeded. Keep the unsubscribe outcome, leave the
   // emails in place (dispose: null), and let the Cleanup button retry.
   async function handleCleanupFailure(stage, e) {
     await trace.bg('decide', {
-      senderEmail: modalSenderEmail,
-      recipientAddress: modalRecipientAddress,
+      senderEmail: job.senderEmail,
+      recipientAddress: job.recipientAddress,
       decision: outcomeDecision,
       dispose: null,
       error: outcomeDecision === 'error' ? sub.error : undefined
     });
     sub.dispose = null;
     updateCachedDecision(sub, outcomeDecision);
-    const msg = modalMode === 'cleanup'
+    const msg = job.mode === 'cleanup'
       ? `Cleanup failed while ${stage} emails: ${e.message || e}. Use Cleanup to retry.`
       : `Unsubscribed, but ${stage} emails failed: ${e.message || e}. Use Cleanup to retry.`;
     toast(msg, 'error');
-    confirmBtn.disabled = false;
-    confirmBtn.textContent = modalConfirmLabel();
-    resetModalProgress();
-    closeUnsubModal();
     trace.log('unsubscribe:cleanup-failed', undefined, { stage });
+    job.status = 'failed';
+    setActivityJobProgress(job, msg, 100);
+    clearProcessingFlag(job);
   }
 
   // Apply dispose action on selected folders
   let cleanupResult = null;
   if (dispose === 'delete' && selectedFolders.length > 0) {
     try {
+      setActivityJobProgress(job, 'Deleting emails...', 75);
       const result = await trace.bg('deleteEmails', {
-        senderEmail: modalSenderEmail,
-        recipientAddress: modalRecipientAddress,
+        senderEmail: job.senderEmail,
+        recipientAddress: job.recipientAddress,
         messageGroups: sub.messageGroups,
         selectedFolders
       });
       cleanupResult = result;
       if (result?.dryRun) toast(`Dry run: would delete ${result.deleted || 0} emails`, 'info');
       if (result?.cancelled && !result.actionCompleted) {
-        if (modalMode !== 'cleanup') {
+        if (job.mode !== 'cleanup') {
           await trace.bg('decide', {
-            senderEmail: modalSenderEmail,
-            recipientAddress: modalRecipientAddress,
+            senderEmail: job.senderEmail,
+            recipientAddress: job.recipientAddress,
             decision: outcomeDecision,
             dispose: null,
             error: outcomeDecision === 'error' ? sub.error : undefined
@@ -1272,7 +1399,9 @@ async function doUnsubscribeConfirm() {
           sub.dispose = null;
           updateCachedDecision(sub, outcomeDecision);
         }
-        finishModalCancellation(trace);
+        job.status = 'failed';
+        setActivityJobProgress(job, 'Operation cancelled', 100);
+        clearProcessingFlag(job);
         return;
       }
     } catch (e) {
@@ -1281,9 +1410,10 @@ async function doUnsubscribeConfirm() {
     }
   } else if (dispose === 'move' && selectedFolders.length > 0) {
     try {
+      setActivityJobProgress(job, 'Moving emails...', 75);
       const result = await trace.bg('moveEmails', {
-        senderEmail: modalSenderEmail,
-        recipientAddress: modalRecipientAddress,
+        senderEmail: job.senderEmail,
+        recipientAddress: job.recipientAddress,
         messageGroups: sub.messageGroups,
         selectedFolders,
         destinationFolderId: destination.id,
@@ -1294,10 +1424,10 @@ async function doUnsubscribeConfirm() {
         toast(`Dry run: would move ${result.moved || 0} emails`, 'info');
       }
       if (result?.cancelled && !result.actionCompleted) {
-        if (modalMode !== 'cleanup') {
+        if (job.mode !== 'cleanup') {
           await trace.bg('decide', {
-            senderEmail: modalSenderEmail,
-            recipientAddress: modalRecipientAddress,
+            senderEmail: job.senderEmail,
+            recipientAddress: job.recipientAddress,
             decision: outcomeDecision,
             dispose: null,
             error: outcomeDecision === 'error' ? sub.error : undefined
@@ -1305,7 +1435,9 @@ async function doUnsubscribeConfirm() {
           sub.dispose = null;
           updateCachedDecision(sub, outcomeDecision);
         }
-        finishModalCancellation(trace);
+        job.status = 'failed';
+        setActivityJobProgress(job, 'Operation cancelled', 100);
+        clearProcessingFlag(job);
         return;
       }
     } catch (e) {
@@ -1316,9 +1448,10 @@ async function doUnsubscribeConfirm() {
 
   // Finalize decision (cleanup succeeded or nothing to dispose).
   try {
+    setActivityJobProgress(job, 'Saving result...', 90);
     await trace.bg('decide', {
-      senderEmail: modalSenderEmail,
-      recipientAddress: modalRecipientAddress,
+      senderEmail: job.senderEmail,
+      recipientAddress: job.recipientAddress,
       decision: outcomeDecision,
       dispose,
       cleanupDestination: destination,
@@ -1326,10 +1459,10 @@ async function doUnsubscribeConfirm() {
     });
   } catch (e) {
     toast('Error: ' + (e.message || e), 'error');
-    confirmBtn.disabled = false;
-    confirmBtn.textContent = modalConfirmLabel();
     trace.log('unsubscribe:failed', undefined, { stage: 'persist-decision' });
-    resetModalProgress();
+    job.status = 'failed';
+    setActivityJobProgress(job, `Failed to save result: ${e.message || e}`, 100);
+    clearProcessingFlag(job);
     return;
   }
 
@@ -1344,11 +1477,11 @@ async function doUnsubscribeConfirm() {
   const name = sub.senderName || sub.senderEmail;
   let outcomeMessage;
   let outcomeType = 'success';
-  if (modalMode === 'cleanup') {
+  if (job.mode === 'cleanup') {
     outcomeMessage = `Updated email cleanup for ${name}`;
   } else if (unsubscribeResult?.drafted) {
     if (unsubscribeResult.draftReason === 'no-identity-match') {
-      outcomeMessage = `Opened unsubscribe email as a draft for ${name} — no identity matches ${sub.recipientAddress || 'the receiving address'}, so check the From address and send it yourself`;
+      outcomeMessage = `Opened unsubscribe email as a draft for ${name} - no identity matches ${sub.recipientAddress || 'the receiving address'}, so check the From address and send it yourself`;
       outcomeType = 'info';
     } else {
       outcomeMessage = `Prepared unsubscribe email draft for ${name}`;
@@ -1362,16 +1495,10 @@ async function doUnsubscribeConfirm() {
     outcomeType = 'error';
   }
 
-  if (modalCancelRequested) {
-    finishModalCancellation(trace, `${outcomeMessage} — completed before cancellation took effect`);
-    return;
-  }
-
   toast(outcomeMessage, outcomeType);
-
-  showModalProgress(trace.id, 'Complete', 100);
-  resetModalProgress();
-  closeUnsubModal();
+  job.status = outcomeType === 'error' ? 'failed' : 'complete';
+  setActivityJobProgress(job, outcomeMessage, 100);
+  clearProcessingFlag(job);
   trace.log('unsubscribe:complete');
 }
 
@@ -1725,6 +1852,11 @@ document.addEventListener('DOMContentLoaded', async () => {
     updateAutoSendUnsubscribeEmails(e.target.checked);
   });
   document.getElementById('full-reset-btn').addEventListener('click', doFullReset);
+  document.getElementById('activity-list').addEventListener('click', (e) => {
+    const btn = e.target.closest('.js-dismiss-activity');
+    if (!btn) return;
+    dismissActivityJob(Number(btn.dataset.jobId));
+  });
   attachCardListeners();
 
   document.getElementById('modal-cancel').addEventListener('click', cancelOrCloseUnsubModal);
