@@ -1624,13 +1624,17 @@ async function processActivityJob(job) {
   updateCachedDecision(sub, outcomeDecision);
 
   const name = sub.senderName || sub.senderEmail;
+  const cleanupRequested = (dispose === 'delete' || dispose === 'move') && selectedFolders.length > 0;
   let outcomeMessage;
   let outcomeType = 'success';
   if (job.cancelRequested && job.mode === 'cleanup') {
     outcomeMessage = `Cleanup completed for ${name} before cancellation took effect`;
     outcomeType = 'info';
-  } else if (job.cancelRequested) {
+  } else if (job.cancelRequested && cleanupRequested) {
     outcomeMessage = `Unsubscribed from ${name}; cleanup completed before cancellation took effect`;
+    outcomeType = 'info';
+  } else if (job.cancelRequested) {
+    outcomeMessage = `Unsubscribed from ${name} before cancellation took effect`;
     outcomeType = 'info';
   } else if (job.mode === 'cleanup') {
     outcomeMessage = `Updated email cleanup for ${name}`;
