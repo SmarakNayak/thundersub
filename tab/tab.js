@@ -70,6 +70,15 @@ function toast(msg, type = 'info') {
   }, 6000);
 }
 
+function positionToastContainer() {
+  const toastContainer = document.getElementById('toast-container');
+  const activity = document.getElementById('activity-section');
+  if (!toastContainer || !activity) return;
+  const visible = activity.classList.contains('open');
+  const height = visible ? activity.getBoundingClientRect().height : 0;
+  toastContainer.style.bottom = visible ? `${Math.ceil(height + 32)}px` : '20px';
+}
+
 function bg(command, data) {
   return browser.runtime.sendMessage({ command, ...data });
 }
@@ -162,6 +171,7 @@ function renderActivityQueue() {
       (job.status === 'queued' || job.status === 'running') && el('div', { class: 'activity-progress-track' },
         el('div', { class: 'activity-progress-bar', style: `width:${Math.max(0, Math.min(100, job.progress || 0))}%` })));
   }));
+  positionToastContainer();
 }
 
 function setActivityJobProgress(job, message, progress) {
@@ -1981,6 +1991,7 @@ function pollScanStatus() {
 
 // ── Init ─────────────────────────────────────────────────────────────────────
 document.addEventListener('DOMContentLoaded', async () => {
+  window.addEventListener('resize', positionToastContainer);
   document.getElementById('scan-btn').addEventListener('click', startScan);
 
   // Scan scope modal
