@@ -49,7 +49,7 @@ ATN allows limited HTML (`<b> <i> <em> <strong> <ul> <ol> <li> <blockquote> <cod
 <ul>
 <li>Reads the standard List-Unsubscribe header (RFC 2369) and supports one-click unsubscribe (RFC 8058).</li>
 <li>Also finds unsubscribe links embedded in email bodies (HTML and plain text) in 13 languages (English, Dutch, German, French, Spanish, Italian, Portuguese, Polish, Swedish, Danish, Norwegian, Finnish, and Russian) when senders don't play by the rules — while skipping quoted and forwarded content.</li>
-<li>Scans all accounts and folders, skipping Junk, Trash, Sent, Drafts, and Gmail's "All Mail" duplicates. Pause, resume, or stop long scans at any time, with live message-by-message progress.</li>
+<li>Scans all accounts and folders, skipping Junk, Trash, Sent, Drafts, and Gmail's "All Mail" duplicates by default while keeping every folder selectable. Pause, resume, or stop long scans at any time, with live message-by-message progress.</li>
 <li>Scan scope controls: untick whole accounts or folders (skip that giant archive backup), and skip known senders or entire domains (phish@spammer.com, spammer.com).</li>
 </ul>
 

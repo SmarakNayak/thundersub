@@ -1446,7 +1446,7 @@ function closeScanScopeModal() {
 
 function renderScopeTree(scope) {
   const excludedAccounts = new Set(scope.excludedAccountIds || []);
-  const excludedFolders = new Set(scope.excludedFolderIds || []);
+  const folderOverrides = scope.folderOverrides || {};
   const accounts = (scope.accounts || []).map(account => {
     if (!account.scannable) {
       return el('div', { class: 'tree-account' },
@@ -1462,7 +1462,7 @@ function renderScopeTree(scope) {
       el('label', { class: 'tree-account-label' },
         el('input', { type: 'checkbox', class: 'scope-account-check', checked: !accountExcluded }),
         el('span', { class: 'tree-account-name' }, account.accountName)),
-      renderScopeFolderNodes(account.folders, 0, accountExcluded, excludedFolders));
+      renderScopeFolderNodes(account.folders, 0, accountExcluded, folderOverrides));
   });
   document.getElementById('scope-tree').replaceChildren(...accounts);
   for (const accountEl of document.querySelectorAll('#scope-tree .tree-account[data-account-id]')) {
@@ -1470,21 +1470,25 @@ function renderScopeTree(scope) {
   }
 }
 
-function renderScopeFolderNodes(folders, depth, parentExcluded, excludedFolders) {
+function renderScopeFolderNodes(folders, depth, parentExcluded, folderOverrides) {
   const nodes = [];
   for (const f of folders || []) {
     const hasChildren = f.subFolders && f.subFolders.length > 0;
-    const checked = !parentExcluded && !excludedFolders.has(f.id);
+    const defaultIncluded = !f.defaultExcluded;
+    const checked = !parentExcluded && (folderOverrides[f.id] ?? defaultIncluded);
     nodes.push(el('div', { class: 'tree-node', style: `padding-left:${depth * 16}px` },
-      el('label', { class: 'tree-folder-label' },
+      el('label', {
+        class: 'tree-folder-label',
+        title: f.defaultExcluded ? 'Skipped by default. Check to include this folder in scans.' : ''
+      },
         hasChildren
           ? el('span', { class: 'tree-toggle', 'data-folder-id': f.id }, '▸')
           : el('span', { class: 'tree-spacer' }),
-        el('input', { type: 'checkbox', class: 'scope-folder-check', value: f.id, checked }),
+        el('input', { type: 'checkbox', class: 'scope-folder-check', value: f.id, checked, 'data-default-excluded': f.defaultExcluded ? 'true' : 'false' }),
         el('span', { class: 'tree-folder-name' }, f.name))));
     if (hasChildren) {
       nodes.push(el('div', { class: 'tree-subtree', 'data-parent-id': f.id, style: 'display:none' },
-        renderScopeFolderNodes(f.subFolders, depth + 1, parentExcluded, excludedFolders)));
+        renderScopeFolderNodes(f.subFolders, depth + 1, parentExcluded, folderOverrides)));
     }
   }
   return nodes;
@@ -1524,16 +1528,19 @@ const SCOPE_ADDRESS_PATTERN = /^((\*|[^\s@*]*)@[^\s@*]+|\*?@\*\.[^\s@*]+|[^\s@*]
 
 async function saveScanScope() {
   const excludedAccountIds = [];
-  const excludedFolderIds = [];
+  const folderOverrides = {};
   for (const accountEl of document.querySelectorAll('#scope-tree .tree-account[data-account-id]')) {
     const folderChecks = [...accountEl.querySelectorAll('.scope-folder-check')];
-    const unchecked = folderChecks.filter(cb => !cb.checked);
     const accountChecked = accountEl.querySelector('.scope-account-check').checked;
-    if ((folderChecks.length > 0 && unchecked.length === folderChecks.length) ||
+    const checkedCount = folderChecks.filter(cb => cb.checked).length;
+    if ((folderChecks.length > 0 && checkedCount === 0) ||
         (folderChecks.length === 0 && !accountChecked)) {
       excludedAccountIds.push(accountEl.dataset.accountId);
     } else {
-      excludedFolderIds.push(...unchecked.map(cb => cb.value));
+      for (const cb of folderChecks) {
+        const defaultIncluded = cb.dataset.defaultExcluded !== 'true';
+        if (cb.checked !== defaultIncluded) folderOverrides[cb.value] = cb.checked;
+      }
     }
   }
 
@@ -1548,7 +1555,7 @@ async function saveScanScope() {
   }
 
   try {
-    await bg('setScanScope', { excludedAccountIds, excludedFolderIds, skipSenders, skipRecipients });
+    await bg('setScanScope', { excludedAccountIds, folderOverrides, skipSenders, skipRecipients });
     closeScanScopeModal();
     toast('Scan scope saved', 'success');
     refreshScanScopeLabel();
@@ -1562,13 +1569,19 @@ async function refreshScanScopeLabel() {
   try {
     const scope = await bg('getScanScope');
     const excludedAccounts = new Set(scope.excludedAccountIds || []);
-    const excludedFolders = new Set(scope.excludedFolderIds || []);
+    const folderOverrides = scope.folderOverrides || {};
     let total = 0;
     let excluded = 0;
+    let includedDefaultOff = 0;
     const countFolders = (folders, accountExcluded) => {
       for (const f of folders || []) {
-        total++;
-        if (accountExcluded || excludedFolders.has(f.id)) excluded++;
+        const included = !accountExcluded && (folderOverrides[f.id] ?? !f.defaultExcluded);
+        if (f.defaultExcluded) {
+          if (included) includedDefaultOff++;
+        } else {
+          total++;
+          if (!included) excluded++;
+        }
         countFolders(f.subFolders, accountExcluded);
       }
     };
@@ -1579,6 +1592,7 @@ async function refreshScanScopeLabel() {
     const skippedFrom = (scope.skipSenders || []).length;
     const skippedTo = (scope.skipRecipients || []).length;
     const parts = [excluded > 0 ? `${total - excluded}/${total} folders` : 'all folders'];
+    if (includedDefaultOff > 0) parts.push(`${includedDefaultOff} default-skipped folder${includedDefaultOff === 1 ? '' : 's'}`);
     if (skippedFrom > 0) parts.push(`${skippedFrom} From filter${skippedFrom === 1 ? '' : 's'}`);
     if (skippedTo > 0) parts.push(`${skippedTo} To filter${skippedTo === 1 ? '' : 's'}`);
     btn.textContent = `Scan scope: ${parts.join(' · ')}`;

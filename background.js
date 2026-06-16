@@ -458,22 +458,25 @@ function newestUniqueMethods(candidates) {
 // ── Folder collection ────────────────────────────────────────────────────────
 const SCAN_EXCLUDED_FOLDER_TYPES = new Set(['junk', 'trash', 'sent', 'drafts', 'outbox', 'templates']);
 
-function isScannableFolder(folder) {
+function isDefaultScannableFolder(folder) {
   if (SCAN_EXCLUDED_FOLDER_TYPES.has(folder.type)) return false;
   return folder.name !== 'All Mail' && folder.name !== '[Gmail]/All Mail';
 }
 
-async function collectAllFolders(account) {
+async function collectAllFolders(account, folderOverrides = {}) {
   const results = [];
 
-  async function walk(folders) {
+  async function walk(folders, parentDefaultExcluded = false) {
     for (const folder of folders) {
-      if (!isScannableFolder(folder)) continue;
-      results.push(folder);
+      const defaultExcluded = parentDefaultExcluded || !isDefaultScannableFolder(folder);
+      const defaultIncluded = !defaultExcluded;
+      if ((folderOverrides[folder.id] ?? defaultIncluded) === true) {
+        results.push(folder);
+      }
       try {
         const subFolders = await browser.folders.getSubFolders(folder.id, false);
         if (subFolders && subFolders.length > 0) {
-          await walk(subFolders);
+          await walk(subFolders, defaultExcluded);
         }
       } catch (e) { /* Some folders may not support subfolders */ }
     }
@@ -487,18 +490,27 @@ async function collectAllFolders(account) {
 
 // ── Scan scope ───────────────────────────────────────────────────────────────
 //
-// Folder exclusions are stored as ids — accounts excluded wholesale plus
-// individually unchecked folders — so newly created accounts and folders are
-// scanned by default. From/To skip patterns are exact addresses or *@domain
-// (see scan-scope.js).
+// Folder scan choices are stored as per-folder overrides: true means
+// explicitly included, false means explicitly excluded, and absence means use
+// the app's default for that folder. From/To skip patterns are exact addresses
+// or *@domain (see scan-scope.js).
 
 async function getScanScopeSettings() {
   const result = await browser.storage.local.get([
-    'scanExcludedAccountIds', 'scanExcludedFolderIds', 'scanSkipSenders', 'scanSkipRecipients'
+    'scanExcludedAccountIds', 'scanFolderOverrides', 'scanExcludedFolderIds', 'scanIncludedFolderIds',
+    'scanSkipSenders', 'scanSkipRecipients'
   ]);
+  const folderOverrides = normalizeFolderOverrides(result.scanFolderOverrides);
+  // Compatibility with pre-override settings. New saves write scanFolderOverrides.
+  for (const folderId of result.scanExcludedFolderIds || []) {
+    if (!(folderId in folderOverrides)) folderOverrides[folderId] = false;
+  }
+  for (const folderId of result.scanIncludedFolderIds || []) {
+    if (!(folderId in folderOverrides)) folderOverrides[folderId] = true;
+  }
   return {
     excludedAccountIds: result.scanExcludedAccountIds || [],
-    excludedFolderIds: result.scanExcludedFolderIds || [],
+    folderOverrides,
     skipSenders: result.scanSkipSenders || [],
     skipRecipients: result.scanSkipRecipients || []
   };
@@ -510,18 +522,28 @@ function normalizeStringList(values) {
     .filter(Boolean))];
 }
 
-async function setScanScope({ excludedAccountIds, excludedFolderIds, skipSenders, skipRecipients }) {
+function normalizeFolderOverrides(overrides) {
+  const normalized = {};
+  if (!overrides || typeof overrides !== 'object') return normalized;
+  for (const [folderId, value] of Object.entries(overrides)) {
+    if (value === true || value === false) normalized[String(folderId)] = value;
+  }
+  return normalized;
+}
+
+async function setScanScope({ excludedAccountIds, folderOverrides, skipSenders, skipRecipients }) {
   await browser.storage.local.set({
     scanExcludedAccountIds: normalizeStringList(excludedAccountIds),
-    scanExcludedFolderIds: normalizeStringList(excludedFolderIds),
+    scanFolderOverrides: normalizeFolderOverrides(folderOverrides),
     scanSkipSenders: normalizeStringList(skipSenders).map(p => p.toLowerCase()),
     scanSkipRecipients: normalizeStringList(skipRecipients).map(p => p.toLowerCase())
   });
+  await browser.storage.local.remove(['scanExcludedFolderIds', 'scanIncludedFolderIds']);
   return { ok: true };
 }
 
-// The full account/folder tree as the scanner sees it (same folder
-// exclusions), with unscannable account types flagged for the UI.
+// The full account/folder tree for selectable scan scope, with folders that
+// are skipped by default flagged so the UI can keep them unchecked initially.
 async function getScanScope() {
   const accounts = await browser.accounts.list();
   const tree = [];
@@ -541,15 +563,21 @@ async function getScanScope() {
   return { accounts: tree, ...(await getScanScopeSettings()) };
 }
 
-async function walkScanScopeFolders(folders) {
+async function walkScanScopeFolders(folders, parentDefaultExcluded = false) {
   const result = [];
   for (const folder of folders) {
-    if (!isScannableFolder(folder)) continue;
-    const node = { id: folder.id, name: folder.name, subFolders: [] };
+    const defaultExcluded = parentDefaultExcluded || !isDefaultScannableFolder(folder);
+    const node = {
+      id: folder.id,
+      name: folder.name,
+      type: folder.type,
+      defaultExcluded,
+      subFolders: []
+    };
     try {
       const children = await browser.folders.getSubFolders(folder.id, false);
       if (children && children.length > 0) {
-        node.subFolders = await walkScanScopeFolders(children);
+        node.subFolders = await walkScanScopeFolders(children, defaultExcluded);
       }
     } catch (e) { /* Some folders may not support subfolders */ }
     result.push(node);
@@ -812,13 +840,13 @@ async function runScan() {
   console.log('[ThunderSub] Scan started');
 
   try {
-    const { excludedAccountIds, excludedFolderIds, skipSenders, skipRecipients } = await getScanScopeSettings();
+    const { excludedAccountIds, folderOverrides, skipSenders, skipRecipients } = await getScanScopeSettings();
     const excludedAccounts = new Set(excludedAccountIds);
-    const excludedFolders = new Set(excludedFolderIds);
+    const overriddenFolders = Object.keys(folderOverrides).length;
     const skipsSender = buildAddressSkipMatcher(skipSenders);
     const skipsRecipient = buildAddressSkipMatcher(skipRecipients);
-    if (excludedAccounts.size > 0 || excludedFolders.size > 0 || skipSenders.length > 0 || skipRecipients.length > 0) {
-      console.log(`[ThunderSub] Scan scope: excluding ${excludedAccounts.size} account(s) and ${excludedFolders.size} folder(s), skipping ${skipSenders.length} From pattern(s) and ${skipRecipients.length} To pattern(s)`);
+    if (excludedAccounts.size > 0 || overriddenFolders > 0 || skipSenders.length > 0 || skipRecipients.length > 0) {
+      console.log(`[ThunderSub] Scan scope: excluding ${excludedAccounts.size} account(s), overriding ${overriddenFolders} folder(s), skipping ${skipSenders.length} From pattern(s) and ${skipRecipients.length} To pattern(s)`);
     }
 
     const accounts = await browser.accounts.list();
@@ -841,9 +869,8 @@ async function runScan() {
       const accountAddresses = identities
         .map(identity => identity.email)
         .filter(Boolean);
-      const folders = await collectAllFolders(account);
+      const folders = await collectAllFolders(account, folderOverrides);
       for (const f of folders) {
-        if (excludedFolders.has(f.id)) continue;
         let messageCount = 0;
         try {
           const info = await browser.folders.getFolderInfo(f.id);
