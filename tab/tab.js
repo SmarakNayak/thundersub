@@ -18,6 +18,7 @@ let activityQueue = [];
 let activeActivityJob = null;
 let recentActivityJobs = [];
 let nextActivityJobId = 1;
+let activityModalJobId = null;
 
 // The scan button reads "Rescan Emails" once a scan has produced data, else
 // "Scan Emails". Only touches the label while the button is idle so it never
@@ -117,27 +118,40 @@ function syncProcessingFlags() {
   for (const sub of subsCache) sub.processing = isSubscriptionProcessing(sub);
 }
 
+function allActivityJobs() {
+  return [
+    ...(activeActivityJob ? [activeActivityJob] : []),
+    ...activityQueue,
+    ...recentActivityJobs,
+  ];
+}
+
+function findActivityJob(jobId) {
+  return allActivityJobs().find(job => job.id === jobId);
+}
+
+function activityStatus(job) {
+  if (job.status === 'queued') return { label: 'Queued', className: 'running' };
+  if (job.status === 'running') return { label: job.cancelRequested ? 'Cancelling' : 'Running', className: 'running' };
+  if (job.status === 'complete') return { label: 'Done', className: 'done' };
+  if (job.status === 'cancelled') return { label: 'Cancelled', className: 'cancelled' };
+  return { label: 'Error', className: 'error' };
+}
+
 function renderActivityQueue() {
   const section = document.getElementById('activity-section');
   const list = document.getElementById('activity-list');
   if (!section || !list) return;
 
-  const jobs = [
-    ...(activeActivityJob ? [activeActivityJob] : []),
-    ...activityQueue,
-    ...recentActivityJobs,
-  ];
+  const jobs = allActivityJobs();
   section.classList.toggle('open', jobs.length > 0);
   list.replaceChildren(...jobs.map(job => {
-    const statusClass = job.status === 'failed' ? 'error' : (job.status === 'complete' ? 'done' : 'running');
-    const statusLabel = job.status === 'queued' ? 'Queued' :
-      job.status === 'running' ? 'Running' :
-      job.status === 'complete' ? 'Done' : 'Error';
-    return el('div', { class: 'activity-item' },
+    const status = activityStatus(job);
+    return el('div', { class: 'activity-item js-open-activity', 'data-job-id': job.id, title: 'View activity details' },
       el('div', { class: 'activity-row' },
         el('div', { class: 'activity-name', title: activityJobLabel(job) }, activityJobLabel(job)),
-        el('div', { class: `activity-status ${statusClass}` }, statusLabel),
-        (job.status === 'complete' || job.status === 'failed') && el('button', {
+        el('div', { class: `activity-status ${status.className}` }, status.label),
+        (job.status === 'complete' || job.status === 'failed' || job.status === 'cancelled') && el('button', {
           class: 'activity-dismiss js-dismiss-activity',
           title: 'Dismiss activity item',
           'aria-label': 'Dismiss activity item',
@@ -153,6 +167,7 @@ function setActivityJobProgress(job, message, progress) {
   job.message = message;
   if (Number.isFinite(progress)) job.progress = progress;
   renderActivityQueue();
+  if (activityModalJobId === job.id) renderActivityModal(job);
 }
 
 function clearProcessingFlag(job) {
@@ -206,6 +221,7 @@ async function runNextActivityJob() {
 
 function dismissActivityJob(jobId) {
   recentActivityJobs = recentActivityJobs.filter(job => job.id !== jobId);
+  if (activityModalJobId === jobId) closeActivityModal();
   renderActivityQueue();
 }
 
@@ -213,7 +229,94 @@ function clearActivityQueue() {
   activityQueue = [];
   activeActivityJob = null;
   recentActivityJobs = [];
+  closeActivityModal();
   renderActivityQueue();
+}
+
+function activityDetailRows(job) {
+  const method = job.method ? `${METHOD_LABELS[job.method.type] || job.method.type}: ${job.method.url}` : 'None';
+  const dispose = DISPOSE_LABELS[job.dispose] || job.dispose || 'None';
+  const folderText = job.selectedFolders?.length
+    ? job.selectedFolders.map(f => `${f.accountName} | ${f.folderName}`).join(', ')
+    : 'All current folders';
+  const rows = [
+    ['Status', activityStatus(job).label],
+    ['From', job.senderEmail],
+    ['To', job.recipientAddress || '(unknown)'],
+    ['Mode', job.mode === 'cleanup' ? 'Cleanup' : 'Unsubscribe'],
+    ['Method', method],
+    ['Email action', dispose],
+    ['Messages', String(job.selectedMessages || 0)],
+    ['Folders', folderText],
+  ];
+  if (job.destination) rows.push(['Destination', job.destination.label || job.destination.folderName || job.destination.id]);
+  if (job.traceId) rows.push(['Trace', job.traceId]);
+  return rows;
+}
+
+function renderActivityModal(job) {
+  const title = document.getElementById('activity-modal-title');
+  const body = document.getElementById('activity-modal-body');
+  const cancelBtn = document.getElementById('activity-modal-cancel-job');
+  if (!title || !body || !cancelBtn) return;
+
+  title.textContent = activityJobLabel(job);
+  body.replaceChildren(
+    el('div', { class: 'activity-modal-detail' },
+      activityDetailRows(job).map(([label, value]) =>
+        el('div', { class: 'activity-modal-row' },
+          el('div', { class: 'activity-modal-label' }, label),
+          el('div', { class: 'activity-modal-value' }, value))),
+      el('div', { class: 'activity-modal-message' }, job.message || 'Waiting...')));
+
+  const cancellable = job.status === 'queued' || job.status === 'running';
+  cancelBtn.style.display = cancellable ? '' : 'none';
+  cancelBtn.disabled = job.cancelRequested === true;
+  cancelBtn.textContent = job.cancelRequested ? 'Cancelling...' : 'Cancel Job';
+}
+
+function openActivityModal(jobId) {
+  const job = findActivityJob(jobId);
+  if (!job) return;
+  activityModalJobId = jobId;
+  renderActivityModal(job);
+  document.getElementById('activity-modal-overlay').classList.add('open');
+}
+
+function closeActivityModal() {
+  activityModalJobId = null;
+  document.getElementById('activity-modal-overlay')?.classList.remove('open');
+}
+
+async function cancelActivityJob(jobId) {
+  const job = findActivityJob(jobId);
+  if (!job || job.status === 'complete' || job.status === 'failed' || job.status === 'cancelled') return;
+
+  if (job.status === 'queued') {
+    activityQueue = activityQueue.filter(candidate => candidate !== job);
+    job.status = 'cancelled';
+    job.message = 'Cancelled before it started';
+    job.progress = 100;
+    recentActivityJobs = [job, ...recentActivityJobs];
+    clearProcessingFlag(job);
+    renderActivityQueue();
+    renderActivityModal(job);
+    runNextActivityJob();
+    return;
+  }
+
+  job.cancelRequested = true;
+  setActivityJobProgress(job, job.message ? `${job.message} (cancelling...)` : 'Cancelling...');
+  renderActivityModal(job);
+  if (job.traceId) {
+    try {
+      await bg('cancelOperation', { traceId: job.traceId });
+    } catch (e) {
+      job.cancelRequested = false;
+      setActivityJobProgress(job, `Failed to request cancellation: ${e.message || e}`);
+      toast('Failed to request cancellation: ' + (e.message || e), 'error');
+    }
+  }
 }
 
 function avatarColor(email) {
@@ -1290,6 +1393,14 @@ async function processActivityJob(job) {
     document.getElementById('dry-run-toggle').checked = false;
   }
 
+  if (job.cancelRequested) {
+    job.status = 'cancelled';
+    setActivityJobProgress(job, 'Cancelled before sending unsubscribe request', 100);
+    clearProcessingFlag(job);
+    trace.log('unsubscribe:cancelled');
+    return;
+  }
+
   if (dryRun) {
     const summary = dryRunSummary(sub, method, dispose, selectedFolders, destination, job.mode);
     toast(summary, 'info');
@@ -1351,6 +1462,30 @@ async function processActivityJob(job) {
   // unsubscribe → unsubscribed; a standalone cleanup keeps the prior decision.
   const outcomeDecision = job.mode === 'cleanup' ? (sub.decision || 'unsubscribed') : 'unsubscribed';
 
+  if (job.cancelRequested) {
+    if (job.mode !== 'cleanup') {
+      await trace.bg('decide', {
+        senderEmail: job.senderEmail,
+        recipientAddress: job.recipientAddress,
+        decision: 'unsubscribed',
+        dispose: null
+      });
+      sub.dispose = null;
+      sub.processing = false;
+      updateCachedDecision(sub, 'unsubscribed');
+      job.status = 'complete';
+      setActivityJobProgress(job, 'Unsubscribed; remaining actions cancelled', 100);
+      toast('Unsubscribed; remaining actions cancelled', 'info');
+    } else {
+      job.status = 'cancelled';
+      setActivityJobProgress(job, 'Cleanup cancelled', 100);
+      toast('Cleanup cancelled', 'info');
+      clearProcessingFlag(job);
+    }
+    trace.log('unsubscribe:cancelled');
+    return;
+  }
+
   // A cleanup (delete/move) failure is NOT an unsubscribe failure — the
   // unsubscribe already succeeded. Keep the unsubscribe outcome, leave the
   // emails in place (dispose: null), and let the Cleanup button retry.
@@ -1363,6 +1498,7 @@ async function processActivityJob(job) {
       error: outcomeDecision === 'error' ? sub.error : undefined
     });
     sub.dispose = null;
+    sub.processing = false;
     updateCachedDecision(sub, outcomeDecision);
     const msg = job.mode === 'cleanup'
       ? `Cleanup failed while ${stage} emails: ${e.message || e}. Use Cleanup to retry.`
@@ -1397,10 +1533,16 @@ async function processActivityJob(job) {
             error: outcomeDecision === 'error' ? sub.error : undefined
           });
           sub.dispose = null;
+          sub.processing = false;
           updateCachedDecision(sub, outcomeDecision);
+          job.status = 'complete';
+          setActivityJobProgress(job, 'Unsubscribed; cleanup cancelled', 100);
+          toast('Unsubscribed; cleanup cancelled', 'info');
+        } else {
+          job.status = 'cancelled';
+          setActivityJobProgress(job, 'Cleanup cancelled', 100);
+          toast('Cleanup cancelled', 'info');
         }
-        job.status = 'failed';
-        setActivityJobProgress(job, 'Operation cancelled', 100);
         clearProcessingFlag(job);
         return;
       }
@@ -1433,10 +1575,16 @@ async function processActivityJob(job) {
             error: outcomeDecision === 'error' ? sub.error : undefined
           });
           sub.dispose = null;
+          sub.processing = false;
           updateCachedDecision(sub, outcomeDecision);
+          job.status = 'complete';
+          setActivityJobProgress(job, 'Unsubscribed; cleanup cancelled', 100);
+          toast('Unsubscribed; cleanup cancelled', 'info');
+        } else {
+          job.status = 'cancelled';
+          setActivityJobProgress(job, 'Cleanup cancelled', 100);
+          toast('Cleanup cancelled', 'info');
         }
-        job.status = 'failed';
-        setActivityJobProgress(job, 'Operation cancelled', 100);
         clearProcessingFlag(job);
         return;
       }
@@ -1472,6 +1620,7 @@ async function processActivityJob(job) {
   }
   sub.dispose = dispose;
   sub.cleanupDestination = destination;
+  sub.processing = false;
   updateCachedDecision(sub, outcomeDecision);
 
   const name = sub.senderName || sub.senderEmail;
@@ -1853,9 +2002,20 @@ document.addEventListener('DOMContentLoaded', async () => {
   });
   document.getElementById('full-reset-btn').addEventListener('click', doFullReset);
   document.getElementById('activity-list').addEventListener('click', (e) => {
-    const btn = e.target.closest('.js-dismiss-activity');
-    if (!btn) return;
-    dismissActivityJob(Number(btn.dataset.jobId));
+    const dismissBtn = e.target.closest('.js-dismiss-activity');
+    if (dismissBtn) {
+      dismissActivityJob(Number(dismissBtn.dataset.jobId));
+      return;
+    }
+    const item = e.target.closest('.js-open-activity');
+    if (item) openActivityModal(Number(item.dataset.jobId));
+  });
+  document.getElementById('activity-modal-close').addEventListener('click', closeActivityModal);
+  document.getElementById('activity-modal-cancel-job').addEventListener('click', () => {
+    if (activityModalJobId != null) cancelActivityJob(activityModalJobId);
+  });
+  document.getElementById('activity-modal-overlay').addEventListener('click', (e) => {
+    if (e.target.id === 'activity-modal-overlay') closeActivityModal();
   });
   attachCardListeners();
 

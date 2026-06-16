@@ -85,13 +85,15 @@ body{display:flex;overflow:hidden}
 .activity-section.open{display:block}
 .activity-section h3{font-size:11px;text-transform:uppercase;letter-spacing:.08em;color:var(--muted);margin-bottom:10px}
 .activity-list{display:flex;flex-direction:column;gap:8px;max-height:260px;overflow-y:auto;padding-right:2px}
-.activity-item{padding:8px 10px;border:1px solid var(--border);border-radius:8px;background:rgba(0,0,0,.15)}
+.activity-item{padding:8px 10px;border:1px solid var(--border);border-radius:8px;background:rgba(0,0,0,.15);cursor:pointer}
+.activity-item:hover{border-color:rgba(99,102,241,.55)}
 .activity-row{display:flex;align-items:center;justify-content:space-between;gap:6px;margin-bottom:4px}
 .activity-name{font-size:12px;font-weight:700;color:var(--text);min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .activity-status{font-size:10px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.04em;white-space:nowrap}
 .activity-status.running{color:var(--info)}
 .activity-status.done{color:var(--success)}
 .activity-status.error{color:var(--danger)}
+.activity-status.cancelled{color:var(--warn)}
 .activity-dismiss{width:18px;height:18px;border:0;border-radius:5px;background:transparent;color:var(--muted);font-size:12px;font-weight:700;line-height:1;cursor:pointer;flex-shrink:0}
 .activity-dismiss:hover{background:var(--border);color:var(--text)}
 .activity-detail{font-size:11px;color:var(--muted);line-height:1.35;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
@@ -297,6 +299,12 @@ label.modal-addr-row:hover{background:rgba(0,0,0,.3)}
 .modal-progress-text{font-size:12px;color:var(--muted);margin-bottom:6px}
 .modal-progress-track{height:6px;background:var(--border);border-radius:3px;overflow:hidden}
 .modal-progress-bar{height:100%;width:0;background:var(--accent);border-radius:3px;transition:width .2s}
+.activity-modal-detail{display:flex;flex-direction:column;gap:8px}
+.activity-modal-row{display:grid;grid-template-columns:96px minmax(0,1fr);gap:10px;font-size:13px;line-height:1.4}
+.activity-modal-label{color:var(--muted);font-weight:700}
+.activity-modal-value{color:var(--text);min-width:0;overflow-wrap:anywhere}
+.activity-modal-message{margin-top:8px;padding:9px 10px;border:1px solid var(--border);border-radius:8px;background:rgba(0,0,0,.18);font-size:12px;color:var(--muted);line-height:1.45;overflow-wrap:anywhere}
+.activity-modal .modal-footer{align-items:center}
 
 /* Toast */
 #toast-container{position:fixed;bottom:20px;right:20px;display:flex;flex-direction:column;gap:8px;z-index:9999}
