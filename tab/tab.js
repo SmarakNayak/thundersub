@@ -1626,7 +1626,13 @@ async function processActivityJob(job) {
   const name = sub.senderName || sub.senderEmail;
   let outcomeMessage;
   let outcomeType = 'success';
-  if (job.mode === 'cleanup') {
+  if (job.cancelRequested && job.mode === 'cleanup') {
+    outcomeMessage = `Cleanup completed for ${name} before cancellation took effect`;
+    outcomeType = 'info';
+  } else if (job.cancelRequested) {
+    outcomeMessage = `Unsubscribed from ${name}; cleanup completed before cancellation took effect`;
+    outcomeType = 'info';
+  } else if (job.mode === 'cleanup') {
     outcomeMessage = `Updated email cleanup for ${name}`;
   } else if (unsubscribeResult?.drafted) {
     if (unsubscribeResult.draftReason === 'no-identity-match') {
