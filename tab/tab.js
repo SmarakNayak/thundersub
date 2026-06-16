@@ -251,7 +251,6 @@ function activityDetailRows(job) {
     ['Folders', folderText],
   ];
   if (job.destination) rows.push(['Destination', job.destination.label || job.destination.folderName || job.destination.id]);
-  if (job.traceId) rows.push(['Trace', job.traceId]);
   return rows;
 }
 
