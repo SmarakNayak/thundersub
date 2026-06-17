@@ -1,0 +1,16 @@
+From: Example Client <client.person@example-client.test>
+To: ThunderSub Test Group <thundersub-test@googlegroups.com>
+Cc: Personal Copy <me@example.net>
+Subject: Project update for the group
+Date: Wed, 17 Jun 2026 17:37:36 +1000
+Message-ID: <googlegroups-to-filter-test-1@example-client.test>
+List-ID: ThunderSub Test Group <thundersub-test.googlegroups.com>
+List-Unsubscribe: <mailto:unsubscribe@example-client.test?subject=unsubscribe>, <https://example-client.test/unsubscribe/thundersub-test>
+List-Unsubscribe-Post: List-Unsubscribe=One-Click
+Content-Type: text/plain; charset=utf-8
+
+This dummy message is for testing ThunderSub's To filter.
+
+Expected behavior:
+If the scan scope To filter contains *@googlegroups.com or thundersub-test@googlegroups.com,
+this message should be ignored even though it has List-Unsubscribe headers.

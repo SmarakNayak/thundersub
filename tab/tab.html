@@ -87,9 +87,9 @@
     <h2 id="main-title">Pending</h2>
     <div class="list-controls">
       <label class="list-control">
-        <span>Receiving address</span>
+        <span>Identity</span>
         <select id="recipient-filter">
-          <option value="">All receiving addresses</option>
+          <option value="">All identities</option>
         </select>
       </label>
       <label class="list-control">
@@ -163,11 +163,10 @@
     <h4>Accounts &amp; folders</h4>
     <div id="scope-tree" class="folder-tree scope-tree"></div>
     <h4 class="scope-addresses-title">From filter</h4>
-    <textarea id="scope-skip-senders" class="scope-addresses-input" rows="4" spellcheck="false" placeholder="phish@spammer1.com&#10;spammer2.com&#10;*@spammer3.com&#10;*@*.spammer4.com"></textarea>
-    <div class="scope-hint">Skip messages from these addresses or domains. One pattern per line.</div>
+    <textarea id="scope-skip-senders" class="scope-addresses-input" rows="4" spellcheck="false" placeholder="hello@example.com&#10;*@example.com&#10;*@*.example.com&#10;example.com"></textarea>
     <h4 class="scope-addresses-title">To filter</h4>
-    <textarea id="scope-skip-recipients" class="scope-addresses-input" rows="4" spellcheck="false" placeholder="old-address@example.com&#10;example.org&#10;*@example.net"></textarea>
-    <div class="scope-hint">Skip messages received by these addresses or domains. Patterns support exact addresses, domains + subdomains, *@domain, and *@*.domain.</div>
+    <textarea id="scope-skip-recipients" class="scope-addresses-input" rows="4" spellcheck="false" placeholder="hello@example.com&#10;*@example.com&#10;*@*.example.com&#10;example.com"></textarea>
+    <div class="scope-hint">Skip matching From or To addresses. Use exact addresses (hello@example.com), domains only (*@example.com), subdomains only (*@*.example.com), or domains + subdomains (example.com).</div>
     <div class="modal-footer">
       <button id="scope-cancel" class="btn btn-muted">Cancel</button>
       <button id="scope-save" class="btn btn-accent">Save</button>

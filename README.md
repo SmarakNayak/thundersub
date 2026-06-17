@@ -41,7 +41,7 @@ Services that do this for webmail exist — and they do it by reading your email
 - The active scope is always summarised under the Scan button, so a narrowed scan can't masquerade as a broken one.
 
 ### 📬 Alias-aware grouping
-ThunderSub doesn't just group by sender — it groups by **(sender, receiving address)**. If `news@example.com` mails both `you@work.com` and `you+shopping@gmail.com`, you'll see two cards, because those are two subscriptions that need two unsubscribes. Mailing-list and forwarded mail is resolved against your configured Thunderbird identities so cards land under the right address.
+ThunderSub doesn't just group by sender — it groups by **(sender, receiving address, and account identity)**. If `news@example.com` mails both `you@work.com` and `you+shopping@gmail.com`, you'll see two cards, because those are two subscriptions that need two unsubscribes. The receiving address comes from delivery/recipient headers; the configured Thunderbird identity is tracked separately for filtering and mailto unsubscribe drafts.
 
 ### ✂️ Four ways out
 For each sender, ThunderSub auto-selects the best available method:
@@ -69,7 +69,7 @@ Want to explore risk-free first? Flip the **Dry Run** toggle and every unsubscri
 
 ### 📊 A review dashboard, not a black box
 - Stats at a glance: emails scanned, subscriptions found, pending / kept / unsubscribed / errors.
-- Filter cards by status or by receiving address; sort by email volume or most recent.
+- Filter cards by status or by configured identity; sort by email volume or most recent.
 - **Keep** the newsletters you actually read, **dismiss** dead entries, or send anything back to Pending with **Review Again**.
 - Failed unsubscribes land in an **Errors** tab with the reason — nothing silently disappears.
 - **View** any subscription to open its emails right in Thunderbird, pre-filtered by sender.
@@ -163,7 +163,7 @@ No build step, no dependencies, no framework — plain JavaScript on the [Thunde
 
 Bug reports and pull requests are welcome. Useful context for hacking:
 
-- Subscriptions are keyed by `senderEmail|recipientAddress` and stored via `browser.storage.local`.
+- Subscriptions are keyed by `senderEmail|recipientAddress|accountIdentityAddress` and stored via `browser.storage.local`.
 - Message references are stored as RFC 5322 Message-IDs and re-resolved to live message ids before any delete/move, because Thunderbird's numeric ids don't survive restarts.
 - The UI talks to the background script exclusively through `browser.runtime.sendMessage` commands — see the handler at the bottom of `background.js` for the full API surface.
 

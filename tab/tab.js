@@ -110,13 +110,35 @@ function createTrace(label, details = {}) {
   };
 }
 
+function subKey(sub) {
+  return sub?.subscriptionKey || JSON.stringify([
+    String(sub?.senderEmail || '').toLowerCase(),
+    String(sub?.recipientAddress || '').toLowerCase(),
+    String(sub?.accountIdentityAddress || '').toLowerCase()
+  ]);
+}
+
+function findSubByKey(subscriptionKey) {
+  return subsCache.find(s => subKey(s) === subscriptionKey);
+}
+
+function subRequest(sub) {
+  return {
+    subscriptionKey: subKey(sub),
+    senderEmail: sub.senderEmail,
+    recipientAddress: sub.recipientAddress || '',
+    accountIdentityAddress: sub.accountIdentityAddress || '',
+    listId: sub.listId || ''
+  };
+}
+
 function activityJobLabel(job) {
-  const sub = subsCache.find(s => s.senderEmail === job.senderEmail && s.recipientAddress === job.recipientAddress);
+  const sub = findSubByKey(job.subscriptionKey);
   return sub?.senderName || job.senderEmail;
 }
 
 function isActivityJobFor(job, sub) {
-  return job?.senderEmail === sub.senderEmail && job?.recipientAddress === (sub.recipientAddress || '');
+  return job?.subscriptionKey === subKey(sub);
 }
 
 function isSubscriptionProcessing(sub) {
@@ -182,7 +204,7 @@ function setActivityJobProgress(job, message, progress) {
 }
 
 function clearProcessingFlag(job) {
-  const sub = subsCache.find(s => s.senderEmail === job.senderEmail && s.recipientAddress === job.recipientAddress);
+  const sub = findSubByKey(job.subscriptionKey);
   if (sub) {
     sub.processing = false;
     renderFilteredCards();
@@ -197,7 +219,7 @@ function enqueueActivityJob(job) {
     message: 'Waiting...',
     ...job
   };
-  const sub = subsCache.find(s => s.senderEmail === queuedJob.senderEmail && s.recipientAddress === queuedJob.recipientAddress);
+  const sub = findSubByKey(queuedJob.subscriptionKey);
   if (sub && isSubscriptionProcessing(sub)) {
     toast('That subscription is already processing', 'info');
     return;
@@ -343,8 +365,8 @@ function initials(name, email) {
   return (s[0] || '?').toUpperCase();
 }
 
-function sid(senderEmail, recipientAddress) {
-  return (senderEmail + '|' + (recipientAddress || '')).replace(/[^a-zA-Z0-9]/g, '_');
+function sid(subscriptionKey) {
+  return String(subscriptionKey || '').replace(/[^a-zA-Z0-9]/g, '_');
 }
 
 function senderLabel(sub) {
@@ -540,12 +562,14 @@ async function loadSubs(filter) {
 
 function refreshRecipientFilter() {
   const select = document.getElementById('recipient-filter');
-  const recipients = [...new Set(subsCache.map(s => s.recipientAddress || '').filter(Boolean))]
+  const recipients = [...new Set(subsCache
+    .map(s => s.accountIdentityAddress || '')
+    .filter(Boolean))]
     .sort((a, b) => a.localeCompare(b));
   if (currentRecipientFilter && !recipients.includes(currentRecipientFilter)) {
     currentRecipientFilter = '';
   }
-  select.replaceChildren(el('option', { value: '' }, 'All receiving addresses'));
+  select.replaceChildren(el('option', { value: '' }, 'All identities'));
   for (const recipient of recipients) {
     const option = document.createElement('option');
     option.value = recipient;
@@ -557,7 +581,7 @@ function refreshRecipientFilter() {
 
 function renderFilteredCards() {
   const filtered = subsCache
-    .filter(s => !currentRecipientFilter || s.recipientAddress === currentRecipientFilter)
+    .filter(s => !currentRecipientFilter || s.accountIdentityAddress === currentRecipientFilter)
     .sort((a, b) => {
       if (currentSort === 'recent') {
         return new Date(b.lastDate || 0).getTime() - new Date(a.lastDate || 0).getTime();
@@ -697,7 +721,7 @@ function buildDetectionEvidence(s) {
 
 // ── Build card ───────────────────────────────────────────────────────────────
 function buildActions(s) {
-  const attrs = { 'data-sender-email': s.senderEmail, 'data-recipient-address': s.recipientAddress || '' };
+  const attrs = { 'data-subscription-key': subKey(s) };
   const reviewTitle = 'Move this subscription back to Pending for review.';
   const btn = (cls, label, title) => el('button', { class: cls, title, ...attrs }, label);
 
@@ -737,7 +761,7 @@ function buildCard(s) {
   const byAccount = groupsByAccount(groups);
   const color = avatarColor(s.senderEmail);
   const ini = initials(s.senderName, s.senderEmail);
-  const id = sid(s.senderEmail, s.recipientAddress);
+  const id = sid(subKey(s));
   const accountNames = Object.keys(byAccount);
 
   // Badges
@@ -752,7 +776,7 @@ function buildCard(s) {
 
   const dateStr = s.lastDate ? new Date(s.lastDate).toLocaleDateString() : '';
   const dismissable = s.decision === 'unsubscribed' || s.decision === 'error';
-  const attrs = { 'data-sender-email': s.senderEmail, 'data-recipient-address': s.recipientAddress || '' };
+  const attrs = { 'data-subscription-key': subKey(s) };
 
   return el('div', { class: `card${s.processing ? ' processing' : ''}`, id: `card-${id}`, ...attrs },
     el('div', { class: 'card-body' },
@@ -803,7 +827,8 @@ function attachCardListeners() {
 
     if (btn.classList.contains('js-view')) {
       try {
-        await bg('viewSubscription', { senderEmail: btn.dataset.senderEmail, recipientAddress: btn.dataset.recipientAddress });
+        const sub = findSubByKey(btn.dataset.subscriptionKey);
+        if (sub) await bg('viewSubscription', subRequest(sub));
       } catch (e) {
         toast('Failed to open emails: ' + (e.message || e), 'error');
       }
@@ -811,51 +836,51 @@ function attachCardListeners() {
     }
 
     if (btn.classList.contains('js-keep')) {
-      await doKeep(btn.dataset.senderEmail, btn.dataset.recipientAddress);
+      await doKeep(btn.dataset.subscriptionKey);
       return;
     }
 
     if (btn.classList.contains('js-unkeep') || btn.classList.contains('js-reset-pending')) {
-      await doPending(btn.dataset.senderEmail, btn.dataset.recipientAddress);
+      await doPending(btn.dataset.subscriptionKey);
       return;
     }
 
     if (btn.classList.contains('js-open-modal')) {
-      openUnsubModal(btn.dataset.senderEmail, btn.dataset.recipientAddress);
+      openUnsubModal(btn.dataset.subscriptionKey);
       return;
     }
 
     if (btn.classList.contains('js-retry')) {
-      openUnsubModal(btn.dataset.senderEmail, btn.dataset.recipientAddress, true);
+      openUnsubModal(btn.dataset.subscriptionKey, true);
       return;
     }
 
     if (btn.classList.contains('js-cleanup')) {
-      openCleanupModal(btn.dataset.senderEmail, btn.dataset.recipientAddress);
+      openCleanupModal(btn.dataset.subscriptionKey);
       return;
     }
 
     if (btn.classList.contains('js-dismiss')) {
-      await doDismiss(btn.dataset.senderEmail, btn.dataset.recipientAddress);
+      await doDismiss(btn.dataset.subscriptionKey);
       return;
     }
 
     if (btn.classList.contains('js-junk')) {
-      await doJunk(btn.dataset.senderEmail, btn.dataset.recipientAddress);
+      await doJunk(btn.dataset.subscriptionKey);
       return;
     }
   });
 }
 
-async function doJunk(senderEmail, recipientAddress) {
-  const sub = subsCache.find(s => s.senderEmail === senderEmail && s.recipientAddress === recipientAddress);
+async function doJunk(subscriptionKey) {
+  const sub = findSubByKey(subscriptionKey);
   if (!sub) return;
   const count = (sub.messageGroups || []).reduce((sum, g) => sum + groupMessageCount(g), 0);
-  const name = sub.senderName || senderEmail;
+  const name = sub.senderName || sub.senderEmail;
   if (!confirm(`Mark ${count} emails from ${name} as junk and move them to the spam folder? The sender will not be contacted.`)) return;
 
   try {
-    const result = await bg('junkEmails', { senderEmail, recipientAddress, messageGroups: sub.messageGroups });
+    const result = await bg('junkEmails', { ...subRequest(sub), messageGroups: sub.messageGroups });
     if (result?.dryRun) {
       toast(`Dry run: would mark ${result.junked || 0} emails as junk and move them to spam. No changes made.`, 'info');
     } else {
@@ -870,11 +895,11 @@ async function doJunk(senderEmail, recipientAddress) {
   }
 }
 
-async function doDismiss(senderEmail, recipientAddress) {
-  const sub = subsCache.find(s => s.senderEmail === senderEmail && s.recipientAddress === recipientAddress);
+async function doDismiss(subscriptionKey) {
+  const sub = findSubByKey(subscriptionKey);
   if (!sub) return;
   try {
-    await bg('dismiss', { senderEmail, recipientAddress });
+    await bg('dismiss', subRequest(sub));
     removeCachedSubscription(sub, true);
   } catch (e) {
     toast('Failed to dismiss: ' + (e.message || e), 'error');
@@ -882,8 +907,7 @@ async function doDismiss(senderEmail, recipientAddress) {
 }
 
 // ── Unsubscribe modal ────────────────────────────────────────────────────────
-let modalSenderEmail = null;
-let modalRecipientAddress = null;
+let modalSubscriptionKey = null;
 let folderTreeCache = null;
 let modalMode = 'unsubscribe';
 let modalIsRetry = false;
@@ -991,12 +1015,11 @@ function renderModalSourceFolders(sub) {
   foldersSection.style.display = groups.length > 0 ? 'block' : 'none';
 }
 
-function openUnsubModal(senderEmail, recipientAddress, isRetry = false) {
-  const sub = subsCache.find(s => s.senderEmail === senderEmail && s.recipientAddress === recipientAddress);
+function openUnsubModal(subscriptionKey, isRetry = false) {
+  const sub = findSubByKey(subscriptionKey);
   if (!sub) return;
 
-  modalSenderEmail = senderEmail;
-  modalRecipientAddress = recipientAddress;
+  modalSubscriptionKey = subscriptionKey;
   modalMode = 'unsubscribe';
   modalIsRetry = isRetry;
   modalSelectedMethod = null;
@@ -1025,7 +1048,7 @@ function openUnsubModal(senderEmail, recipientAddress, isRetry = false) {
         el('span', { class: 'modal-addr' }, sub.senderEmail)),
       el('div', { class: 'modal-kv' },
         el('span', { class: 'modal-kv-label' }, 'To:'),
-        el('span', { class: 'modal-addr' }, recipientAddress || '(unknown)')),
+        el('span', { class: 'modal-addr' }, sub.recipientAddress || '(unknown)')),
       el('div', { class: 'modal-kv' },
         el('span', { class: 'modal-kv-label' }, 'Via:'),
         isRetry
@@ -1073,12 +1096,11 @@ function openUnsubModal(senderEmail, recipientAddress, isRetry = false) {
   onDisposeChange();
 }
 
-function openCleanupModal(senderEmail, recipientAddress, action) {
-  const sub = subsCache.find(s => s.senderEmail === senderEmail && s.recipientAddress === recipientAddress);
+function openCleanupModal(subscriptionKey, action) {
+  const sub = findSubByKey(subscriptionKey);
   if (!sub) return;
 
-  modalSenderEmail = senderEmail;
-  modalRecipientAddress = recipientAddress;
+  modalSubscriptionKey = subscriptionKey;
   modalMode = 'cleanup';
   modalIsRetry = false;
   modalSelectedMethod = null;
@@ -1098,7 +1120,7 @@ function openCleanupModal(senderEmail, recipientAddress, action) {
         el('span', { class: 'modal-addr' }, sub.senderEmail)),
       el('div', { class: 'modal-kv' },
         el('span', { class: 'modal-kv-label' }, 'To:'),
-        el('span', { class: 'modal-addr' }, recipientAddress || '(unknown)')),
+        el('span', { class: 'modal-addr' }, sub.recipientAddress || '(unknown)')),
       el('div', { class: 'modal-kv' },
         el('span', { class: 'modal-kv-label' }, 'Status:'),
         el('span', { class: 'modal-method' }, statusLabel))));
@@ -1124,8 +1146,7 @@ function openCleanupModal(senderEmail, recipientAddress, action) {
 function closeUnsubModal() {
   if (modalOperationTraceId) return;
   document.getElementById('unsub-modal-overlay').classList.remove('open');
-  modalSenderEmail = null;
-  modalRecipientAddress = null;
+  modalSubscriptionKey = null;
   modalMode = 'unsubscribe';
   modalIsRetry = false;
   modalSelectedMethod = null;
@@ -1169,7 +1190,7 @@ async function onDisposeChange() {
 // Render the destination tree showing only accounts this subscription has
 // messages in — a move can't target an unrelated mailbox.
 function renderRelevantFolderTree() {
-  const sub = subsCache.find(s => s.senderEmail === modalSenderEmail && s.recipientAddress === modalRecipientAddress);
+  const sub = findSubByKey(modalSubscriptionKey);
   const relevantAccounts = new Set((sub?.messageGroups || []).map(g => g.accountName));
   renderFolderTree((folderTreeCache || []).filter(a => relevantAccounts.has(a.accountName)));
 }
@@ -1254,7 +1275,7 @@ async function createNewFolder() {
 }
 
 function getSelectedFolders() {
-  const sub = subsCache.find(s => s.senderEmail === modalSenderEmail && s.recipientAddress === modalRecipientAddress);
+  const sub = findSubByKey(modalSubscriptionKey);
   if (!sub) return [];
   const groups = sub.messageGroups || [];
   const checks = document.querySelectorAll('.modal-folder-check');
@@ -1338,8 +1359,8 @@ function errorPayload(stage, message) {
 }
 
 async function doUnsubscribeConfirm() {
-  if (!modalSenderEmail) return;
-  const sub = subsCache.find(s => s.senderEmail === modalSenderEmail && s.recipientAddress === modalRecipientAddress);
+  if (!modalSubscriptionKey) return;
+  const sub = findSubByKey(modalSubscriptionKey);
   if (!sub) return;
 
   const dispose = document.querySelector('input[name="dispose"]:checked').value;
@@ -1361,8 +1382,7 @@ async function doUnsubscribeConfirm() {
   }
 
   enqueueActivityJob({
-    senderEmail: modalSenderEmail,
-    recipientAddress: modalRecipientAddress,
+    ...subRequest(sub),
     mode: modalMode,
     method,
     dispose,
@@ -1374,7 +1394,7 @@ async function doUnsubscribeConfirm() {
 }
 
 async function processActivityJob(job) {
-  const sub = subsCache.find(s => s.senderEmail === job.senderEmail && s.recipientAddress === job.recipientAddress);
+  const sub = findSubByKey(job.subscriptionKey);
   if (!sub) {
     job.status = 'failed';
     job.message = 'Subscription is no longer available';
@@ -1383,6 +1403,13 @@ async function processActivityJob(job) {
     return;
   }
 
+  const jobRequest = {
+    subscriptionKey: job.subscriptionKey,
+    senderEmail: job.senderEmail,
+    recipientAddress: job.recipientAddress || '',
+    accountIdentityAddress: job.accountIdentityAddress || '',
+    listId: job.listId || ''
+  };
   const { method, dispose, selectedFolders, destination } = job;
   const trace = createTrace('unsubscribe', {
     mode: job.mode,
@@ -1434,7 +1461,10 @@ async function processActivityJob(job) {
         unsubscribeResult = r;
         ok = r.ok;
       } else if (method.type === 'mail') {
-        unsubscribeResult = await trace.bg('unsubMail', { url: method.url, recipientAddress: job.recipientAddress });
+        unsubscribeResult = await trace.bg('unsubMail', {
+          url: method.url,
+          recipientAddress: job.accountIdentityAddress || job.recipientAddress
+        });
         ok = true;
       } else if (method.type === 'embedded') {
         unsubscribeResult = await trace.bg('unsubEmbedded', { url: method.url });
@@ -1451,8 +1481,7 @@ async function processActivityJob(job) {
   if (!ok) {
     const message = method ? 'Unsubscribe request failed' : 'No unsubscribe method is available';
     await trace.bg('decide', {
-      senderEmail: job.senderEmail,
-      recipientAddress: job.recipientAddress,
+      ...jobRequest,
       decision: 'error',
       dispose,
       error: errorPayload('unsubscribe', message)
@@ -1475,8 +1504,7 @@ async function processActivityJob(job) {
   if (job.cancelRequested) {
     if (job.mode !== 'cleanup') {
       await trace.bg('decide', {
-        senderEmail: job.senderEmail,
-        recipientAddress: job.recipientAddress,
+        ...jobRequest,
         decision: 'unsubscribed',
         dispose: null
       });
@@ -1501,8 +1529,7 @@ async function processActivityJob(job) {
   // emails in place (dispose: null), and let the Cleanup button retry.
   async function handleCleanupFailure(stage, e) {
     await trace.bg('decide', {
-      senderEmail: job.senderEmail,
-      recipientAddress: job.recipientAddress,
+      ...jobRequest,
       decision: outcomeDecision,
       dispose: null,
       error: outcomeDecision === 'error' ? sub.error : undefined
@@ -1526,8 +1553,7 @@ async function processActivityJob(job) {
     try {
       setActivityJobProgress(job, 'Deleting emails...', 75);
       const result = await trace.bg('deleteEmails', {
-        senderEmail: job.senderEmail,
-        recipientAddress: job.recipientAddress,
+        ...jobRequest,
         messageGroups: sub.messageGroups,
         selectedFolders
       });
@@ -1536,8 +1562,7 @@ async function processActivityJob(job) {
       if (result?.cancelled && !result.actionCompleted) {
         if (job.mode !== 'cleanup') {
           await trace.bg('decide', {
-            senderEmail: job.senderEmail,
-            recipientAddress: job.recipientAddress,
+            ...jobRequest,
             decision: outcomeDecision,
             dispose: null,
             error: outcomeDecision === 'error' ? sub.error : undefined
@@ -1564,8 +1589,7 @@ async function processActivityJob(job) {
     try {
       setActivityJobProgress(job, 'Moving emails...', 75);
       const result = await trace.bg('moveEmails', {
-        senderEmail: job.senderEmail,
-        recipientAddress: job.recipientAddress,
+        ...jobRequest,
         messageGroups: sub.messageGroups,
         selectedFolders,
         destinationFolderId: destination.id,
@@ -1578,8 +1602,7 @@ async function processActivityJob(job) {
       if (result?.cancelled && !result.actionCompleted) {
         if (job.mode !== 'cleanup') {
           await trace.bg('decide', {
-            senderEmail: job.senderEmail,
-            recipientAddress: job.recipientAddress,
+            ...jobRequest,
             decision: outcomeDecision,
             dispose: null,
             error: outcomeDecision === 'error' ? sub.error : undefined
@@ -1608,8 +1631,7 @@ async function processActivityJob(job) {
   try {
     setActivityJobProgress(job, 'Saving result...', 90);
     await trace.bg('decide', {
-      senderEmail: job.senderEmail,
-      recipientAddress: job.recipientAddress,
+      ...jobRequest,
       decision: outcomeDecision,
       dispose,
       cleanupDestination: destination,
@@ -1650,7 +1672,7 @@ async function processActivityJob(job) {
     outcomeMessage = `Updated email cleanup for ${name}`;
   } else if (unsubscribeResult?.drafted) {
     if (unsubscribeResult.draftReason === 'no-identity-match') {
-      outcomeMessage = `Opened unsubscribe email as a draft for ${name} - no identity matches ${sub.recipientAddress || 'the receiving address'}, so check the From address and send it yourself`;
+      outcomeMessage = `Opened unsubscribe email as a draft for ${name} - no identity matches ${sub.accountIdentityAddress || sub.recipientAddress || 'the receiving address'}, so check the From address and send it yourself`;
       outcomeType = 'info';
     } else {
       outcomeMessage = `Prepared unsubscribe email draft for ${name}`;
@@ -1672,25 +1694,25 @@ async function processActivityJob(job) {
 }
 
 // ── Keep action ──────────────────────────────────────────────────────────────
-async function doKeep(senderEmail, recipientAddress) {
-  const sub = subsCache.find(s => s.senderEmail === senderEmail && s.recipientAddress === recipientAddress);
+async function doKeep(subscriptionKey) {
+  const sub = findSubByKey(subscriptionKey);
   if (!sub) return;
 
   try {
-    await bg('decide', { senderEmail, recipientAddress, decision: 'keep', dispose: null });
-    toast(`Kept subscription ${senderEmail}`, 'success');
+    await bg('decide', { ...subRequest(sub), decision: 'keep', dispose: null });
+    toast(`Kept subscription ${sub.senderEmail}`, 'success');
     updateCachedDecision(sub, 'keep');
   } catch (e) {
     toast('Error: ' + e.message, 'error');
   }
 }
 
-async function doPending(senderEmail, recipientAddress) {
-  const sub = subsCache.find(s => s.senderEmail === senderEmail && s.recipientAddress === recipientAddress);
+async function doPending(subscriptionKey) {
+  const sub = findSubByKey(subscriptionKey);
   if (!sub) return;
   try {
-    await bg('decide', { senderEmail, recipientAddress, decision: 'pending', dispose: null });
-    toast(`Moved ${senderEmail} back to pending`, 'success');
+    await bg('decide', { ...subRequest(sub), decision: 'pending', dispose: null });
+    toast(`Moved ${sub.senderEmail} back to pending`, 'success');
     updateCachedDecision(sub, 'pending');
   } catch (e) {
     toast('Error: ' + (e.message || e), 'error');

@@ -34,8 +34,28 @@ const UNSCANNABLE_ACCOUNT_TYPES = new Set(['nntp', 'rss']);
 // ── Storage helpers ──────────────────────────────────────────────────────────
 let stateWriteQueue = Promise.resolve();
 
-function subscriptionKey(senderEmail, recipientAddress) {
-  return JSON.stringify([senderEmail, recipientAddress || '']);
+function subscriptionKey(senderEmail, recipientAddress, accountIdentityAddress = '') {
+  return JSON.stringify([
+    String(senderEmail || '').toLowerCase(),
+    String(recipientAddress || '').toLowerCase(),
+    String(accountIdentityAddress || '').toLowerCase()
+  ]);
+}
+
+function keyForSubscription(sub) {
+  return sub.subscriptionKey || subscriptionKey(
+    sub.senderEmail,
+    sub.recipientAddress,
+    sub.accountIdentityAddress
+  );
+}
+
+function keyFromRequest(request) {
+  return request.subscriptionKey || subscriptionKey(
+    request.senderEmail,
+    request.recipientAddress,
+    request.accountIdentityAddress
+  );
 }
 
 function tracePhase(traceId, phase, startedAt, details = {}) {
@@ -64,8 +84,8 @@ async function loadSubscriptions() {
   const decisions = result.subscriptionDecisions || {};
   const updates = result.subscriptionUpdates || {};
   return (result.subscriptions || []).map(sub => {
-    const key = subscriptionKey(sub.senderEmail, sub.recipientAddress);
-    return { ...sub, ...(updates[key] || {}), ...(decisions[key] || {}) };
+    const key = keyForSubscription(sub);
+    return { ...sub, subscriptionKey: key, ...(updates[key] || {}), ...(decisions[key] || {}) };
   });
 }
 
@@ -82,8 +102,8 @@ async function loadSubscriptionsWithStateSnapshot() {
   const decisions = result.subscriptionDecisions || {};
   const updates = result.subscriptionUpdates || {};
   const subscriptions = (result.subscriptions || []).map(sub => {
-    const key = subscriptionKey(sub.senderEmail, sub.recipientAddress);
-    return { ...sub, ...(updates[key] || {}), ...(decisions[key] || {}) };
+    const key = keyForSubscription(sub);
+    return { ...sub, subscriptionKey: key, ...(updates[key] || {}), ...(decisions[key] || {}) };
   });
   return { subscriptions, decisions, updates };
 }
@@ -114,9 +134,8 @@ async function saveRescanSubscriptions(subs, incorporatedDecisions, incorporated
   await write;
 }
 
-async function saveSubscriptionUpdate(senderEmail, recipientAddress, update, traceId) {
+async function saveSubscriptionUpdate(key, update, traceId) {
   const startedAt = Date.now();
-  const key = subscriptionKey(senderEmail, recipientAddress);
   const write = stateWriteQueue.then(async () => {
     const result = await browser.storage.local.get('subscriptionUpdates');
     const updates = result.subscriptionUpdates || {};
@@ -131,11 +150,11 @@ async function saveSubscriptionUpdate(senderEmail, recipientAddress, update, tra
   });
 }
 
-async function loadCurrentMessageGroups(senderEmail, recipientAddress, fallbackGroups, traceId) {
+async function loadCurrentMessageGroups(key, fallbackGroups, traceId) {
   const startedAt = Date.now();
   await stateWriteQueue;
   const result = await browser.storage.local.get('subscriptionUpdates');
-  const update = (result.subscriptionUpdates || {})[subscriptionKey(senderEmail, recipientAddress)];
+  const update = (result.subscriptionUpdates || {})[key];
   tracePhase(traceId, 'load-subscription-update', startedAt, { hasUpdate: !!update });
   return update?.messageGroups || fallbackGroups || [];
 }
@@ -224,32 +243,74 @@ function parseFromHeader(fromVal) {
   return { name: fromVal.trim(), email: '' };
 }
 
+function extractHeaderEmailAddresses(raw) {
+  const addresses = [];
+  const seen = new Set();
+  const re = /<([^<>\s]+@[^<>\s]+)>|([^\s<>,;"]+@[^\s<>,;"]+)/g;
+  let match;
+  while ((match = re.exec(String(raw || ''))) !== null) {
+    const address = (match[1] || match[2] || '').trim().toLowerCase();
+    if (!address || seen.has(address)) continue;
+    seen.add(address);
+    addresses.push(address);
+  }
+  return addresses;
+}
+
+function parseListId(headers = {}) {
+  const raw = (headers['list-id'] || [])[0];
+  if (!raw) return '';
+  const bracketed = raw.match(/<([^<>]+)>/);
+  return String(bracketed ? bracketed[1] : raw)
+    .trim()
+    .replace(/\s+/g, ' ')
+    .toLowerCase();
+}
+
 function isReplyOrForwardSubject(subject) {
   return /^\s*(?:(?:re|fw|fwd)\s*:\s*)+/i.test(String(subject || ''));
 }
 
 // ── Recipient address extraction ─────────────────────────────────────────────
+// Keep the mailbox recipient and configured account identity separate:
+// recipientAddress drives cards and To filters; accountIdentityAddress drives
+// identity filtering and mailto compose context.
 function parseRecipientAddress(fullMessage, accountAddresses = []) {
   const headers = fullMessage.headers || {};
   const candidates = [];
-  for (const header of ['delivered-to', 'x-original-to', 'envelope-to']) {
-    const value = headers[header];
-    if (!value || !value[0]) continue;
-    const parsed = parseFromHeader(value[0].split(',')[0].trim());
-    if (parsed.email) candidates.push({ address: parsed.email, source: header });
+  const deliveryHeaders = ['x-original-to', 'envelope-to', 'delivered-to'];
+  const visibleHeaders = ['to', 'cc'];
+  for (const header of deliveryHeaders) {
+    for (const value of headers[header] || []) {
+      for (const address of extractHeaderEmailAddresses(value)) {
+        candidates.push({ address, source: header });
+      }
+    }
   }
-  const to = headers['to'];
-  if (to && to[0]) {
-    const parsed = parseFromHeader(to[0].split(',')[0].trim());
-    if (parsed.email) candidates.push({ address: parsed.email, source: 'to' });
+  for (const header of visibleHeaders) {
+    for (const value of headers[header] || []) {
+      for (const address of extractHeaderEmailAddresses(value)) {
+        candidates.push({ address, source: header });
+      }
+    }
   }
 
   const normalizedAccountAddresses = accountAddresses
     .filter(Boolean)
     .map(address => address.toLowerCase());
-  const matchingCandidate = candidates.find(candidate =>
-    normalizedAccountAddresses.includes(candidate.address));
-  if (matchingCandidate) return matchingCandidate;
+  const primaryIdentity = normalizedAccountAddresses[0] || '';
+  const identityFor = (address) =>
+    normalizedAccountAddresses.includes(address) ? address : primaryIdentity;
+
+  const deliveryCandidate = candidates.find(candidate => deliveryHeaders.includes(candidate.source));
+  if (deliveryCandidate) {
+    return { ...deliveryCandidate, accountIdentityAddress: identityFor(deliveryCandidate.address), candidates };
+  }
+
+  const visibleCandidate = candidates.find(candidate => visibleHeaders.includes(candidate.source));
+  if (visibleCandidate) {
+    return { ...visibleCandidate, accountIdentityAddress: identityFor(visibleCandidate.address), candidates };
+  }
 
   for (const header of ['return-path', 'sender', 'errors-to']) {
     const values = headers[header] || [];
@@ -257,19 +318,38 @@ function parseRecipientAddress(fullMessage, accountAddresses = []) {
     const matchingAddress = normalizedAccountAddresses.find(address =>
       joined.includes(address) || joined.includes(address.replace('@', '=')));
     if (matchingAddress) {
-      return { address: matchingAddress, source: `${header}-verp` };
+      return {
+        address: matchingAddress,
+        source: `${header}-verp`,
+        accountIdentityAddress: matchingAddress,
+        candidates
+      };
     }
   }
 
-  // Visible recipient headers can contain mailing-list, group, forwarding, or
-  // vendor-internal addresses. Group unmatched values under the folder's
-  // primary account identity while preserving configured identities/aliases.
-  if (normalizedAccountAddresses.length > 0) {
-    return { address: normalizedAccountAddresses[0], source: 'account-identity' };
+  if (primaryIdentity) {
+    return {
+      address: primaryIdentity,
+      source: 'account-identity',
+      accountIdentityAddress: primaryIdentity,
+      candidates
+    };
   }
 
-  if (candidates.length > 0) return candidates[0];
-  return { address: '', source: 'unknown' };
+  if (candidates.length > 0) return { ...candidates[0], accountIdentityAddress: '', candidates };
+  return { address: '', source: 'unknown', accountIdentityAddress: '', candidates };
+}
+
+function recipientMatchesSkip(recipient, skipsRecipient) {
+  if (!skipsRecipient) return false;
+  const addresses = new Set([
+    recipient?.address,
+    ...(recipient?.candidates || []).map(candidate => candidate.address)
+  ].filter(Boolean));
+  for (const address of addresses) {
+    if (skipsRecipient(address)) return true;
+  }
+  return false;
 }
 
 // ── Embedded unsubscribe link detection ──────────────────────────────────────
@@ -887,7 +967,8 @@ async function runScan() {
     scanState.message = `Scanning ${totalMessages.toLocaleString()} messages in ${allFolders.length} folders...`;
     console.log(`[ThunderSub] Scanning ~${totalMessages} messages in ${allFolders.length} folders across ${accounts.length} accounts`);
 
-    // Accumulate by (senderEmail, recipientAddress) — the atomic subscription unit
+    // Accumulate by the public subscription key:
+    // senderEmail | recipientAddress | accountIdentityAddress.
     const subs = {};
 
     for (let i = 0; i < allFolders.length; i++) {
@@ -932,9 +1013,11 @@ async function runScan() {
 
               const recipient = parseRecipientAddress(full, accountAddresses);
               const recipientAddress = recipient.address;
-              if (skipsRecipient && recipientAddress && skipsRecipient(recipientAddress)) continue;
+              const accountIdentityAddress = recipient.accountIdentityAddress || '';
+              if (recipientMatchesSkip(recipient, skipsRecipient)) continue;
 
               const listUnsub = full.headers['list-unsubscribe'];
+              const listId = parseListId(full.headers);
               let urls = [];
               let oneClick = false;
               let embeddedUrl = null;
@@ -954,14 +1037,17 @@ async function runScan() {
 
               if (!email) continue;
 
-              const key = `${email}|${recipientAddress}`;
+              const key = subscriptionKey(email, recipientAddress, accountIdentityAddress);
 
               if (!subs[key]) {
                 subs[key] = {
+                  subscriptionKey: key,
                   senderName: '',
                   senderNames: {},
                   senderEmail: email,
                   recipientAddress,
+                  accountIdentityAddress,
+                  listId,
                   emailCount: 0,
                   lastDate: '',
                   sampleSubject: '',
@@ -1011,6 +1097,8 @@ async function runScan() {
                 accountName,
                 folderName: folder.name,
                 recipientSource: recipient.source,
+                accountIdentityAddress,
+                listId,
                 sources: [
                   ...(urls.length > 0 ? ['header'] : []),
                   ...(embeddedUrl ? ['embedded'] : [])
@@ -1079,8 +1167,7 @@ async function runScan() {
     } = await loadSubscriptionsWithStateSnapshot();
     const existingMap = {};
     for (const sub of existing) {
-      const k = `${sub.senderEmail}|${sub.recipientAddress || ''}`;
-      existingMap[k] = sub;
+      existingMap[keyForSubscription(sub)] = sub;
     }
 
     const now = new Date().toISOString();
@@ -1097,9 +1184,12 @@ async function runScan() {
       const carryPrevState = !!prev && decision === prev.decision;
 
       merged.push({
+        subscriptionKey: s.subscriptionKey || key,
         senderEmail: s.senderEmail,
         senderName: s.senderName,
         recipientAddress: s.recipientAddress,
+        accountIdentityAddress: s.accountIdentityAddress || '',
+        listId: s.listId || '',
         emailCount: s.emailCount,
         lastDate: s.lastDate,
         sampleSubject: s.sampleSubject,
@@ -1126,9 +1216,9 @@ async function runScan() {
     }
 
     for (const prev of existing) {
-      const k = `${prev.senderEmail}|${prev.recipientAddress || ''}`;
+      const k = keyForSubscription(prev);
       if (!subs[k] && (prev.decision === 'keep' || prev.decision === 'unsubscribed')) {
-        merged.push(prev);
+        merged.push({ ...prev, subscriptionKey: k });
       }
     }
 
@@ -1332,8 +1422,8 @@ async function findJunkFolderId(account) {
 // address is never confirmed active. No delete: spam folders auto-purge, and
 // removing the message right after the move could undercut the report.
 // Accounts without a junk folder fall back to delete-to-Trash.
-async function junkEmails(senderEmail, recipientAddress, messageGroups) {
-  messageGroups = await loadCurrentMessageGroups(senderEmail, recipientAddress, messageGroups);
+async function junkEmails(key, senderEmail, recipientAddress, messageGroups) {
+  messageGroups = await loadCurrentMessageGroups(key, messageGroups);
   if (!messageGroups || messageGroups.length === 0) {
     return { junked: 0, movedToSpam: 0, deleted: 0 };
   }
@@ -1387,7 +1477,7 @@ async function junkEmails(senderEmail, recipientAddress, messageGroups) {
     throw new Error(`Failed to junk ${failedTotal} of ${totalIds} emails.`);
   }
 
-  await saveSubscriptionUpdate(senderEmail, recipientAddress, {
+  await saveSubscriptionUpdate(key, {
     messageGroups: [],
     emailCount: 0,
     dismissed: true,
@@ -1406,9 +1496,9 @@ async function dryRunJunkEmails(senderEmail, recipientAddress, messageGroups) {
   return { junked: ids.length, movedToSpam: ids.length, deleted: 0, dryRun: true };
 }
 
-async function deleteEmails(senderEmail, recipientAddress, messageGroups, selectedFolders, traceId) {
+async function deleteEmails(key, senderEmail, recipientAddress, messageGroups, selectedFolders, traceId) {
   let startedAt;
-  messageGroups = await loadCurrentMessageGroups(senderEmail, recipientAddress, messageGroups, traceId);
+  messageGroups = await loadCurrentMessageGroups(key, messageGroups, traceId);
   if (!messageGroups || messageGroups.length === 0) {
     return { deleted: 0 };
   }
@@ -1431,7 +1521,7 @@ async function deleteEmails(senderEmail, recipientAddress, messageGroups, select
 
   reportCleanupProgress(traceId, 'saving', 0, 1, 'Saving cleanup state...');
   const remainingGroups = removeGroupsForFolders(messageGroups, selectedFolders);
-  await saveSubscriptionUpdate(senderEmail, recipientAddress, {
+  await saveSubscriptionUpdate(key, {
     messageGroups: remainingGroups,
     emailCount: totalMessageCount(remainingGroups),
     updatedAt: new Date().toISOString()
@@ -1446,9 +1536,9 @@ async function deleteEmails(senderEmail, recipientAddress, messageGroups, select
   };
 }
 
-async function moveEmails(senderEmail, recipientAddress, messageGroups, selectedFolders, destinationFolderId, destinationMeta, traceId) {
+async function moveEmails(key, senderEmail, recipientAddress, messageGroups, selectedFolders, destinationFolderId, destinationMeta, traceId) {
   let startedAt;
-  messageGroups = await loadCurrentMessageGroups(senderEmail, recipientAddress, messageGroups, traceId);
+  messageGroups = await loadCurrentMessageGroups(key, messageGroups, traceId);
   if (!messageGroups || messageGroups.length === 0) {
     return { moved: 0 };
   }
@@ -1495,7 +1585,7 @@ async function moveEmails(senderEmail, recipientAddress, messageGroups, selected
 
   reportCleanupProgress(traceId, 'saving', 0, 1, 'Saving cleanup state...');
   const updatedGroups = [...remainingGroups, movedGroup];
-  await saveSubscriptionUpdate(senderEmail, recipientAddress, {
+  await saveSubscriptionUpdate(key, {
     messageGroups: updatedGroups,
     emailCount: totalMessageCount(updatedGroups),
     updatedAt: new Date().toISOString()
@@ -1511,9 +1601,8 @@ async function moveEmails(senderEmail, recipientAddress, messageGroups, selected
 }
 
 // ── Other actions ────────────────────────────────────────────────────────────
-async function setDecision(senderEmail, recipientAddress, decision, dispose, cleanupDestination, error, traceId) {
+async function setDecision(key, decision, dispose, cleanupDestination, error, traceId) {
   const startedAt = Date.now();
-  const key = subscriptionKey(senderEmail, recipientAddress);
   const update = {
     decision,
     dispose: dispose || null,
@@ -1560,8 +1649,8 @@ async function getSubscriptions(filter) {
   return filtered;
 }
 
-async function dismissSubscription(senderEmail, recipientAddress) {
-  await saveSubscriptionUpdate(senderEmail, recipientAddress, {
+async function dismissSubscription(key) {
+  await saveSubscriptionUpdate(key, {
     dismissed: true,
     updatedAt: new Date().toISOString()
   });
@@ -1594,7 +1683,7 @@ async function dryRunMoveEmails(senderEmail, recipientAddress, messageGroups, se
     ? selectedFolders.map(f => `${f.accountName} | ${f.folderName}`).join(', ')
     : 'all';
   const destinationLabel = destinationMeta?.label || destinationFolderId;
-  console.log(`[DRY RUN] Would MOVE ${ids.length} emails from ${sub.senderName || ''} <${senderEmail}> → ${recipientAddress} | folders=${folderDesc} → dest=${destinationLabel}`);
+  console.log(`[DRY RUN] Would MOVE ${ids.length} emails from ${senderEmail} → ${recipientAddress} | folders=${folderDesc} → dest=${destinationLabel}`);
 
   return { moved: ids.length, dryRun: true };
 }
@@ -1645,9 +1734,9 @@ async function createFolderCmd(parentFolderId, folderName) {
   return { id: folder.id, name: folder.name, path: folder.path };
 }
 
-async function viewSubscription(senderEmail, recipientAddress) {
+async function viewSubscription(key, senderEmail) {
   const subs = await loadSubscriptions();
-  const sub = subs.find(s => s.senderEmail === senderEmail && s.recipientAddress === recipientAddress);
+  const sub = subs.find(s => keyForSubscription(s) === key);
   if (!sub || !sub.messageGroups || sub.messageGroups.length === 0) {
     throw new Error('No messages found');
   }
@@ -1689,6 +1778,7 @@ async function viewSubscription(senderEmail, recipientAddress) {
 
 // ── Message handler ──────────────────────────────────────────────────────────
 function handleRuntimeMessage(request, sender) {
+  const requestKey = keyFromRequest(request);
   switch (request.command) {
     case 'scan':
       if (scanState.status !== 'scanning') { runScan(); }
@@ -1739,24 +1829,27 @@ function handleRuntimeMessage(request, sender) {
       return fullReset();
 
     case 'decide':
-      return setDecision(request.senderEmail, request.recipientAddress, request.decision, request.dispose, request.cleanupDestination, request.error, request.traceId)
+      return setDecision(requestKey, request.decision, request.dispose, request.cleanupDestination, request.error, request.traceId)
         .then(() => ({ ok: true }));
 
     case 'dismiss':
-      return dismissSubscription(request.senderEmail, request.recipientAddress)
+      return dismissSubscription(requestKey)
         .then(() => ({ ok: true }));
 
     case 'junkEmails':
-      return getDryRun().then(dryRun => (dryRun ? dryRunJunkEmails : junkEmails)(
-        request.senderEmail, request.recipientAddress, request.messageGroups));
+      return getDryRun().then(dryRun => dryRun
+        ? dryRunJunkEmails(request.senderEmail, request.recipientAddress, request.messageGroups)
+        : junkEmails(requestKey, request.senderEmail, request.recipientAddress, request.messageGroups));
 
     case 'deleteEmails':
-      return getDryRun().then(dryRun => (dryRun ? dryRunDeleteEmails : deleteEmails)(
-        request.senderEmail, request.recipientAddress, request.messageGroups, request.selectedFolders, request.traceId));
+      return getDryRun().then(dryRun => dryRun
+        ? dryRunDeleteEmails(request.senderEmail, request.recipientAddress, request.messageGroups, request.selectedFolders)
+        : deleteEmails(requestKey, request.senderEmail, request.recipientAddress, request.messageGroups, request.selectedFolders, request.traceId));
 
     case 'moveEmails':
-      return getDryRun().then(dryRun => (dryRun ? dryRunMoveEmails : moveEmails)(
-        request.senderEmail, request.recipientAddress, request.messageGroups, request.selectedFolders, request.destinationFolderId, request.destination, request.traceId));
+      return getDryRun().then(dryRun => dryRun
+        ? dryRunMoveEmails(request.senderEmail, request.recipientAddress, request.messageGroups, request.selectedFolders, request.destinationFolderId, request.destination)
+        : moveEmails(requestKey, request.senderEmail, request.recipientAddress, request.messageGroups, request.selectedFolders, request.destinationFolderId, request.destination, request.traceId));
 
     case 'getScanScope':
       return getScanScope();
@@ -1771,7 +1864,7 @@ function handleRuntimeMessage(request, sender) {
       return createFolderCmd(request.parentFolderId, request.folderName);
 
     case 'viewSubscription':
-      return viewSubscription(request.senderEmail, request.recipientAddress);
+      return viewSubscription(requestKey, request.senderEmail);
 
     case 'unsubOneClick':
       return getDryRun().then(dryRun => dryRun
