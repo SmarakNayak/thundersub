@@ -9,6 +9,7 @@ let scanPollTimer = null;
 let subsCache = [];
 let dryRun = false;
 let autoSendUnsubscribeEmails = false;
+let defaultUnsubscribeDispose = 'keep';
 let hasScannedBefore = false;
 let scanInProgress = false;
 let currentRecipientFilter = '';
@@ -19,6 +20,7 @@ let activeActivityJob = null;
 let recentActivityJobs = [];
 let nextActivityJobId = 1;
 let activityModalJobId = null;
+const DISPOSE_SETTING_LABELS = { delete: 'Delete emails', move: 'Move emails', keep: 'Leave emails' };
 
 // The scan button reads "Rescan Emails" once a scan has produced data, else
 // "Scan Emails". Only touches the label while the button is idle so it never
@@ -425,6 +427,38 @@ async function updateAutoSendUnsubscribeEmails(enabled) {
   } catch (e) {
     document.getElementById('auto-send-email-toggle').checked = autoSendUnsubscribeEmails;
     toast('Failed to update email unsubscribe setting: ' + (e.message || e), 'error');
+  }
+}
+
+function normalizeDefaultUnsubscribeDispose(value) {
+  return ['keep', 'move', 'delete'].includes(value) ? value : 'keep';
+}
+
+async function loadDefaultUnsubscribeDispose() {
+  try {
+    const result = await bg('getDefaultUnsubscribeDispose');
+    defaultUnsubscribeDispose = normalizeDefaultUnsubscribeDispose(result.defaultUnsubscribeDispose);
+    document.getElementById('default-unsub-dispose-select').value = defaultUnsubscribeDispose;
+  } catch (e) {
+    defaultUnsubscribeDispose = 'keep';
+    document.getElementById('default-unsub-dispose-select').value = defaultUnsubscribeDispose;
+  }
+}
+
+async function updateDefaultUnsubscribeDispose(value) {
+  const previous = defaultUnsubscribeDispose;
+  try {
+    const result = await bg('setDefaultUnsubscribeDispose', {
+      defaultUnsubscribeDispose: normalizeDefaultUnsubscribeDispose(value)
+    });
+    defaultUnsubscribeDispose = normalizeDefaultUnsubscribeDispose(result.defaultUnsubscribeDispose);
+    document.getElementById('default-unsub-dispose-select').value = defaultUnsubscribeDispose;
+    const label = DISPOSE_SETTING_LABELS[defaultUnsubscribeDispose] || defaultUnsubscribeDispose;
+    toast(`Default unsubscribe cleanup: ${label}`, 'success');
+  } catch (e) {
+    defaultUnsubscribeDispose = previous;
+    document.getElementById('default-unsub-dispose-select').value = defaultUnsubscribeDispose;
+    toast('Failed to update default cleanup setting: ' + (e.message || e), 'error');
   }
 }
 
@@ -920,6 +954,7 @@ function closeKeepMenus(exceptButton = null) {
     const toggle = split.querySelector('.js-keep-menu-toggle');
     if (exceptButton && toggle === exceptButton) return;
     split.classList.remove('open');
+    split.closest('.card')?.classList.remove('menu-open');
     if (toggle) toggle.setAttribute('aria-expanded', 'false');
   });
 }
@@ -930,6 +965,7 @@ function toggleKeepMenu(button) {
   const willOpen = !split.classList.contains('open');
   closeKeepMenus(button);
   split.classList.toggle('open', willOpen);
+  split.closest('.card')?.classList.toggle('menu-open', willOpen);
   button.setAttribute('aria-expanded', willOpen ? 'true' : 'false');
 }
 
@@ -1148,9 +1184,9 @@ function openUnsubModal(subscriptionKey, isRetry = false) {
   document.querySelector('.modal-dispose h4').textContent = 'What to do with existing emails?';
   document.querySelector('.modal-dispose').style.display = 'block';
 
-  // Reset dispose & hide destination tree. "Leave emails" is the default:
-  // deletion should be a deliberate choice, not a hasty confirm away.
-  document.querySelector('input[name="dispose"][value="keep"]').checked = true;
+  // Reset dispose & hide destination tree. The persisted setting controls the
+  // default for unsubscribe flows only; explicit cleanup flows set their own.
+  document.querySelector(`input[name="dispose"][value="${defaultUnsubscribeDispose}"]`).checked = true;
   document.getElementById('modal-dest-wrap').style.display = 'none';
   document.getElementById('modal-new-folder-form').style.display = 'none';
 
@@ -2163,6 +2199,9 @@ document.addEventListener('DOMContentLoaded', async () => {
   document.getElementById('auto-send-email-toggle').addEventListener('change', (e) => {
     updateAutoSendUnsubscribeEmails(e.target.checked);
   });
+  document.getElementById('default-unsub-dispose-select').addEventListener('change', (e) => {
+    updateDefaultUnsubscribeDispose(e.target.value);
+  });
   document.getElementById('full-reset-btn').addEventListener('click', doFullReset);
   document.getElementById('activity-list').addEventListener('click', (e) => {
     const dismissBtn = e.target.closest('.js-dismiss-activity');
@@ -2242,6 +2281,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 
   await loadDryRun();
   await loadAutoSendUnsubscribeEmails();
+  await loadDefaultUnsubscribeDispose();
   await loadStats();
   await loadSubs('pending');
 

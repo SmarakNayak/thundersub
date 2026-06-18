@@ -190,6 +190,21 @@ async function setAutoSendUnsubscribeEmails(autoSendUnsubscribeEmails) {
   return { autoSendUnsubscribeEmails: enabled };
 }
 
+function normalizeDefaultUnsubscribeDispose(value) {
+  return ['keep', 'move', 'delete'].includes(value) ? value : 'keep';
+}
+
+async function getDefaultUnsubscribeDispose() {
+  const result = await browser.storage.local.get('defaultUnsubscribeDispose');
+  return normalizeDefaultUnsubscribeDispose(result.defaultUnsubscribeDispose);
+}
+
+async function setDefaultUnsubscribeDispose(defaultUnsubscribeDispose) {
+  const normalized = normalizeDefaultUnsubscribeDispose(defaultUnsubscribeDispose);
+  await browser.storage.local.set({ defaultUnsubscribeDispose: normalized });
+  return { defaultUnsubscribeDispose: normalized };
+}
+
 async function fullReset() {
   if (scanState.status === 'scanning') {
     throw new Error('Stop the active scan before running a full reset.');
@@ -1824,6 +1839,12 @@ function handleRuntimeMessage(request, sender) {
 
     case 'setAutoSendUnsubscribeEmails':
       return setAutoSendUnsubscribeEmails(request.autoSendUnsubscribeEmails);
+
+    case 'getDefaultUnsubscribeDispose':
+      return getDefaultUnsubscribeDispose().then(defaultUnsubscribeDispose => ({ defaultUnsubscribeDispose }));
+
+    case 'setDefaultUnsubscribeDispose':
+      return setDefaultUnsubscribeDispose(request.defaultUnsubscribeDispose);
 
     case 'fullReset':
       return fullReset();
