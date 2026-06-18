@@ -267,8 +267,12 @@ function clearActivityQueue() {
 }
 
 function activityDetailRows(job) {
-  const method = job.method ? `${METHOD_LABELS[job.method.type] || job.method.type}: ${job.method.url}` : 'None';
+  const isUnsubscribeJob = job.mode !== 'cleanup' && job.mode !== 'keep-cleanup';
+  const method = isUnsubscribeJob && job.method ? `${METHOD_LABELS[job.method.type] || job.method.type}: ${job.method.url}` : 'None';
   const dispose = DISPOSE_LABELS[job.dispose] || job.dispose || 'None';
+  const mode = job.mode === 'keep-cleanup'
+    ? 'Keep subscription'
+    : job.mode === 'cleanup' ? 'Cleanup' : 'Unsubscribe';
   const folderText = job.selectedFolders?.length
     ? job.selectedFolders.map(f => `${f.accountName} | ${f.folderName}`).join(', ')
     : 'All current folders';
@@ -276,12 +280,12 @@ function activityDetailRows(job) {
     ['Status', activityStatus(job).label],
     ['From', job.senderEmail],
     ['To', job.recipientAddress || '(unknown)'],
-    ['Mode', job.mode === 'cleanup' ? 'Cleanup' : 'Unsubscribe'],
-    ['Method', method],
+    ['Mode', mode],
+    isUnsubscribeJob && ['Method', method],
     ['Email action', dispose],
     ['Messages', String(job.selectedMessages || 0)],
     ['Folders', folderText],
-  ];
+  ].filter(Boolean);
   if (job.destination) rows.push(['Destination', job.destination.label || job.destination.folderName || job.destination.id]);
   return rows;
 }
@@ -724,14 +728,34 @@ function buildActions(s) {
   const attrs = { 'data-subscription-key': subKey(s) };
   const reviewTitle = 'Move this subscription back to Pending for review.';
   const btn = (cls, label, title) => el('button', { class: cls, title, ...attrs }, label);
+  const keepSplit = () => el('div', { class: 'keep-split' },
+    el('button', {
+      class: 'btn btn-keep keep-main js-keep',
+      title: 'Keep this subscription',
+      ...attrs
+    }, 'Keep'),
+    el('button', {
+      class: 'btn btn-keep keep-caret js-keep-menu-toggle',
+      title: 'Keep with email cleanup options',
+      'aria-label': 'Keep with email cleanup options',
+      'aria-expanded': 'false',
+      ...attrs
+    }, '▾'),
+    el('div', { class: 'keep-menu' },
+      el('button', { class: 'keep-menu-item js-keep-cleanup-delete', ...attrs }, 'Keep and delete emails'),
+      el('button', { class: 'keep-menu-item js-keep-cleanup-move', ...attrs }, 'Keep and move emails')));
 
   if (s.processing) {
     return [el('span', { class: 'action-note' }, 'Processing in Activity...')];
   }
 
   if (s.decision === 'keep') {
-    return [
+    const messageButtons = subHasMessages(s) ? [
       btn('btn btn-view js-view', 'View'),
+      btn('btn btn-outline js-cleanup', 'Cleanup')
+    ] : [];
+    return [
+      ...messageButtons,
       btn('btn btn-keep js-unkeep', 'Review Again', reviewTitle)
     ];
   }
@@ -751,7 +775,7 @@ function buildActions(s) {
 
   return [
     btn('btn btn-view js-view', 'View'),
-    btn('btn btn-keep js-keep', 'Keep Subscription'),
+    keepSplit(),
     btn('btn btn-unsub js-open-modal', 'Unsubscribe')
   ];
 }
@@ -815,6 +839,10 @@ function attachCardListeners() {
     const btn = e.target.closest('button');
     if (!btn) return;
 
+    if (!btn.classList.contains('js-keep-menu-toggle')) {
+      closeKeepMenus();
+    }
+
     if (btn.classList.contains('js-evidence-toggle')) {
       const card = btn.closest('.card');
       const evidence = card?.querySelector('.detection-evidence');
@@ -837,6 +865,21 @@ function attachCardListeners() {
 
     if (btn.classList.contains('js-keep')) {
       await doKeep(btn.dataset.subscriptionKey);
+      return;
+    }
+
+    if (btn.classList.contains('js-keep-menu-toggle')) {
+      toggleKeepMenu(btn);
+      return;
+    }
+
+    if (btn.classList.contains('js-keep-cleanup-delete')) {
+      openKeepCleanupModal(btn.dataset.subscriptionKey, 'delete');
+      return;
+    }
+
+    if (btn.classList.contains('js-keep-cleanup-move')) {
+      openKeepCleanupModal(btn.dataset.subscriptionKey, 'move');
       return;
     }
 
@@ -870,6 +913,24 @@ function attachCardListeners() {
       return;
     }
   });
+}
+
+function closeKeepMenus(exceptButton = null) {
+  document.querySelectorAll('.keep-split.open').forEach(split => {
+    const toggle = split.querySelector('.js-keep-menu-toggle');
+    if (exceptButton && toggle === exceptButton) return;
+    split.classList.remove('open');
+    if (toggle) toggle.setAttribute('aria-expanded', 'false');
+  });
+}
+
+function toggleKeepMenu(button) {
+  const split = button.closest('.keep-split');
+  if (!split) return;
+  const willOpen = !split.classList.contains('open');
+  closeKeepMenus(button);
+  split.classList.toggle('open', willOpen);
+  button.setAttribute('aria-expanded', willOpen ? 'true' : 'false');
 }
 
 async function doJunk(subscriptionKey) {
@@ -998,6 +1059,12 @@ browser.runtime.onMessage.addListener(request => {
 });
 
 function modalConfirmLabel() {
+  if (modalMode === 'keep-cleanup') {
+    const dispose = document.querySelector('input[name="dispose"]:checked')?.value;
+    if (dispose === 'delete') return 'Keep + Delete';
+    if (dispose === 'move') return 'Keep + Move';
+    return 'Keep';
+  }
   if (modalMode === 'cleanup') return 'Apply';
   return modalIsRetry ? 'Retry' : 'Unsubscribe';
 }
@@ -1143,6 +1210,49 @@ function openCleanupModal(subscriptionKey, action) {
   onDisposeChange();
 }
 
+function openKeepCleanupModal(subscriptionKey, action) {
+  const sub = findSubByKey(subscriptionKey);
+  if (!sub) return;
+
+  modalSubscriptionKey = subscriptionKey;
+  modalMode = 'keep-cleanup';
+  modalIsRetry = false;
+  modalSelectedMethod = null;
+  cleanupDefaultAction = action;
+  resetModalProgress();
+
+  document.getElementById('modal-title').textContent =
+    `Keep ${sub.senderName || sub.senderEmail}`;
+  document.getElementById('modal-addresses').replaceChildren(
+    el('div', { class: 'modal-addr-row modal-addr-box' },
+      el('div', { class: 'modal-kv' },
+        el('span', { class: 'modal-kv-label' }, 'From:'),
+        el('span', { class: 'modal-addr' }, sub.senderEmail)),
+      el('div', { class: 'modal-kv' },
+        el('span', { class: 'modal-kv-label' }, 'To:'),
+        el('span', { class: 'modal-addr' }, sub.recipientAddress || '(unknown)')),
+      el('div', { class: 'modal-kv' },
+        el('span', { class: 'modal-kv-label' }, 'Status:'),
+        el('span', { class: 'modal-method' }, 'will keep subscription'))));
+
+  document.getElementById('modal-trust-hint').textContent = '';
+
+  renderModalSourceFolders(sub);
+  document.querySelector('.modal-dispose h4').textContent = 'What to do with existing emails?';
+  document.querySelector('.modal-dispose').style.display = 'block';
+  document.querySelector(`input[name="dispose"][value="${action || 'delete'}"]`).checked = true;
+  document.getElementById('modal-dest-wrap').style.display = 'none';
+  document.getElementById('modal-new-folder-form').style.display = 'none';
+
+  const confirmBtn = document.getElementById('modal-confirm');
+  confirmBtn.disabled = false;
+  confirmBtn.textContent = modalConfirmLabel();
+  confirmBtn.title = '';
+
+  document.getElementById('unsub-modal-overlay').classList.add('open');
+  onDisposeChange();
+}
+
 function closeUnsubModal() {
   if (modalOperationTraceId) return;
   document.getElementById('unsub-modal-overlay').classList.remove('open');
@@ -1159,6 +1269,7 @@ async function onDisposeChange() {
   const foldersSection = document.getElementById('modal-folders-section');
   const destWrap = document.getElementById('modal-dest-wrap');
   const hasGroups = document.querySelectorAll('.modal-folder-check').length > 0;
+  document.getElementById('modal-confirm').textContent = modalConfirmLabel();
 
   // Show source folder checkboxes for delete or move
   const showFolders = (dispose === 'delete' || dispose === 'move') && hasGroups;
@@ -1325,14 +1436,15 @@ function displayFolderPath(path, fallback) {
 }
 
 function dryRunSummary(sub, method, dispose, selectedFolders, destination, mode = modalMode) {
-  if (mode === 'cleanup') {
-    if (dispose === 'delete') return `Dry run: would delete ${selectedMessageCount(sub, selectedFolders)} emails. No changes made.`;
+  if (mode === 'cleanup' || mode === 'keep-cleanup') {
+    const keepPrefix = mode === 'keep-cleanup' ? 'would keep this subscription and ' : 'would ';
+    if (dispose === 'delete') return `Dry run: ${keepPrefix}delete ${selectedMessageCount(sub, selectedFolders)} emails. No changes made.`;
     if (dispose === 'move') {
-      let summary = `Dry run: would move ${selectedMessageCount(sub, selectedFolders)} emails`;
+      let summary = `Dry run: ${keepPrefix}move ${selectedMessageCount(sub, selectedFolders)} emails`;
       if (destination) summary += ` to ${destination.label}`;
       return `${summary}. No changes made.`;
     }
-    return 'Dry run: would leave existing emails as-is. No changes made.';
+    return `Dry run: ${keepPrefix}leave existing emails as-is. No changes made.`;
   }
 
   let summary;
@@ -1365,7 +1477,9 @@ async function doUnsubscribeConfirm() {
 
   const dispose = document.querySelector('input[name="dispose"]:checked').value;
   const selectedFolders = getSelectedFolders();
-  const method = modalSelectedMethod || getBestMethod(sub);
+  const method = (modalMode === 'cleanup' || modalMode === 'keep-cleanup')
+    ? null
+    : modalSelectedMethod || getBestMethod(sub);
   const destination = dispose === 'move' ? getSelectedDestination() : null;
 
   // Validate the move destination before anything fires — especially the
@@ -1419,7 +1533,7 @@ async function processActivityJob(job) {
     selectedMessages: job.selectedMessages
   });
   job.traceId = trace.id;
-  setActivityJobProgress(job, job.mode === 'cleanup' ? 'Preparing cleanup...' : 'Sending unsubscribe request...', 5);
+  setActivityJobProgress(job, (job.mode === 'cleanup' || job.mode === 'keep-cleanup') ? 'Preparing cleanup...' : 'Sending unsubscribe request...', 5);
 
   try {
     const result = await trace.bg('getDryRun');
@@ -1432,7 +1546,7 @@ async function processActivityJob(job) {
 
   if (job.cancelRequested) {
     job.status = 'cancelled';
-    setActivityJobProgress(job, 'Cancelled before sending unsubscribe request', 100);
+    setActivityJobProgress(job, (job.mode === 'cleanup' || job.mode === 'keep-cleanup') ? 'Cleanup cancelled' : 'Cancelled before sending unsubscribe request', 100);
     clearProcessingFlag(job);
     trace.log('unsubscribe:cancelled');
     return;
@@ -1451,7 +1565,7 @@ async function processActivityJob(job) {
   // Fire unsubscribe
   let ok = false;
   let unsubscribeResult = null;
-  if (job.mode === 'cleanup') {
+  if (job.mode === 'cleanup' || job.mode === 'keep-cleanup') {
     ok = true;
     setActivityJobProgress(job, 'Applying cleanup...', 10);
   } else if (method) {
@@ -1499,10 +1613,11 @@ async function processActivityJob(job) {
 
   // Outcome of the unsubscribe step itself, independent of cleanup: a real
   // unsubscribe → unsubscribed; a standalone cleanup keeps the prior decision.
-  const outcomeDecision = job.mode === 'cleanup' ? (sub.decision || 'unsubscribed') : 'unsubscribed';
+  const outcomeDecision = job.mode === 'keep-cleanup' ? 'keep'
+    : job.mode === 'cleanup' ? (sub.decision || 'unsubscribed') : 'unsubscribed';
 
   if (job.cancelRequested) {
-    if (job.mode !== 'cleanup') {
+    if (job.mode !== 'cleanup' && job.mode !== 'keep-cleanup') {
       await trace.bg('decide', {
         ...jobRequest,
         decision: 'unsubscribed',
@@ -1537,7 +1652,7 @@ async function processActivityJob(job) {
     sub.dispose = null;
     sub.processing = false;
     updateCachedDecision(sub, outcomeDecision);
-    const msg = job.mode === 'cleanup'
+    const msg = (job.mode === 'cleanup' || job.mode === 'keep-cleanup')
       ? `Cleanup failed while ${stage} emails: ${e.message || e}. Use Cleanup to retry.`
       : `Unsubscribed, but ${stage} emails failed: ${e.message || e}. Use Cleanup to retry.`;
     toast(msg, 'error');
@@ -1560,7 +1675,7 @@ async function processActivityJob(job) {
       cleanupResult = result;
       if (result?.dryRun) toast(`Dry run: would delete ${result.deleted || 0} emails`, 'info');
       if (result?.cancelled && !result.actionCompleted) {
-        if (job.mode !== 'cleanup') {
+        if (job.mode !== 'cleanup' && job.mode !== 'keep-cleanup') {
           await trace.bg('decide', {
             ...jobRequest,
             decision: outcomeDecision,
@@ -1600,7 +1715,7 @@ async function processActivityJob(job) {
         toast(`Dry run: would move ${result.moved || 0} emails`, 'info');
       }
       if (result?.cancelled && !result.actionCompleted) {
-        if (job.mode !== 'cleanup') {
+        if (job.mode !== 'cleanup' && job.mode !== 'keep-cleanup') {
           await trace.bg('decide', {
             ...jobRequest,
             decision: outcomeDecision,
@@ -1668,6 +1783,8 @@ async function processActivityJob(job) {
   } else if (job.cancelRequested) {
     outcomeMessage = `Unsubscribed from ${name} before cancellation took effect`;
     outcomeType = 'info';
+  } else if (job.mode === 'keep-cleanup') {
+    outcomeMessage = `Kept subscription ${name}`;
   } else if (job.mode === 'cleanup') {
     outcomeMessage = `Updated email cleanup for ${name}`;
   } else if (unsubscribeResult?.drafted) {
@@ -2014,6 +2131,9 @@ function pollScanStatus() {
 // ── Init ─────────────────────────────────────────────────────────────────────
 document.addEventListener('DOMContentLoaded', async () => {
   window.addEventListener('resize', positionToastContainer);
+  document.addEventListener('click', (e) => {
+    if (!e.target.closest('.keep-split')) closeKeepMenus();
+  });
   document.getElementById('scan-btn').addEventListener('click', startScan);
 
   // Scan scope modal
