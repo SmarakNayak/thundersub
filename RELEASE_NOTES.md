@@ -1,17 +1,5 @@
-Initial public release.
+Maintenance release.
 
-- Scan all accounts and folders for subscriptions using List-Unsubscribe headers and embedded unsubscribe links in 13 languages
-- Scan scope controls to choose accounts and folders, and filter From or To addresses and whole domains
-- One-click (RFC 8058), email, and browser unsubscribe methods, with retry via any detected method
-- Cleanup actions to delete, move, or mark a sender's messages as Junk
-- Keep a subscription while deleting or moving its existing emails
-- Default unsubscribe cleanup setting to preselect Leave, Move, or Delete
-- Alias-aware grouping by sender and receiving address
-- Protection against suspicious unsubscribe links and untrusted embedded-link senders
-- Safe defaults that keep existing emails unless you choose otherwise
-- Optional dry-run mode to preview actions
-- Keep, dismiss, and review-again workflow with a stats dashboard
-- Background Activity stack for unsubscribe and cleanup jobs, with progress, details, cancellation, and manual dismiss
-- Live message-level progress with pause and cancellation for scans and cleanup operations
+- Fixed the runtime message listener to return promises only for messages it handles, avoiding response conflicts with other listeners
 
 Compatible with Thunderbird 128 and later.

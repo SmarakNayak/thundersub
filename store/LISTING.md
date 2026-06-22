@@ -119,24 +119,12 @@ They show the real tab UI (unmodified `tab/tab.html`/`tab.css`/`tab.js`) rendere
 demo data (`.example` senders, `alex@example.net` recipient) — regenerate any time with
 `bash store/screenshots/make.sh` (needs chromium or nix).
 
-## Release notes (1.0.13)
+## Release notes (1.0.14)
 
 ```
-Initial public release.
+Maintenance release.
 
-• Scan all accounts and folders for subscriptions (List-Unsubscribe headers + embedded unsubscribe links in 13 languages)
-• Scan scope controls: choose which accounts and folders are scanned, and filter From or To addresses and whole domains
-• One-click (RFC 8058), email, and browser unsubscribe methods, with retry via any detected method
-• Cleanup actions to delete, move, or mark a sender's messages as Junk
-• Keep a subscription while deleting or moving its existing emails
-• Default unsubscribe cleanup setting to preselect Leave, Move, or Delete
-• Alias-aware grouping by sender and receiving address
-• Hardened against malicious senders: suspicious unsubscribe links are blocked before opening, one-click endpoints must use public HTTPS, email content is never rendered as HTML, and a warning appears before unsubscribing from senders without the standard unsubscribe header
-• Safe defaults: existing emails are kept on unsubscribe unless you choose otherwise
-• Optional dry-run mode to preview every action before it runs
-• Keep / dismiss / review-again workflow with a stats dashboard
-• Background Activity stack for unsubscribe and cleanup jobs, with progress, details, cancellation, and manual dismiss
-• Live message-level progress with pause and cancellation for scans and cleanup operations
+• Fixed the runtime message listener to return promises only for messages it handles, avoiding response conflicts with other listeners.
 
 Compatible with Thunderbird 128 and later.
 ```
@@ -146,7 +134,7 @@ Compatible with Thunderbird 128 and later.
 ## Notes to reviewers (paste into "Notes to Reviewer" on upload)
 
 ```
-Version 1.0.13 supersedes the pending 1.0 through 1.0.12 submissions. Please review 1.0.13 for the initial public release.
+Version 1.0.14 addresses the review feedback on 1.0.13: the runtime.onMessage listener is no longer asynchronous and now returns undefined for unhandled messages. Handled messages continue to return their response promise.
 
 Source is plain, unminified JavaScript with no build step and no third-party libraries — the uploaded XPI is the source (repo: https://github.com/SmarakNayak/thundersub).
 
