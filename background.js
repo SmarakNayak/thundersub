@@ -1911,17 +1911,20 @@ function handleRuntimeMessage(request, sender) {
       return browser.tabs.create({ url: '/tab/tab.html' }).then(() => ({ ok: true }));
 
     default:
-      return Promise.resolve({ error: 'Unknown command' });
+      // Return undefined for messages this listener does not handle. If more
+      // receivers are added, an explicit message target is better practice so
+      // the intended receiver can distinguish and log unknown targeted commands.
+      return undefined;
   }
 }
 
-browser.runtime.onMessage.addListener(async (request, sender) => {
-  try {
-    return await handleRuntimeMessage(request, sender);
-  } catch (e) {
-    console.error(`[ThunderSub] Command failed: ${request.command}`, e);
-    throw e;
-  }
+browser.runtime.onMessage.addListener((request, sender) => {
+  const response = handleRuntimeMessage(request, sender);
+  if (response === undefined) return undefined;
+  return response.catch(error => {
+    console.error(`[ThunderSub] Command failed: ${request.command}`, error);
+    throw error;
+  });
 });
 
 console.log('[ThunderSub] Background script loaded');
