@@ -1,0 +1,27 @@
+From - Thu Aug 20 09:00:00 2026
+From: Queue Repro First <first@queue-repro.invalid>
+To: ThunderSub Tester <tester@thundersub.invalid>
+Subject: Queue reproduction - first subscription
+Date: Thu, 20 Aug 2026 09:00:00 +1000
+Message-ID: <first@queue-repro.invalid>
+List-ID: Queue Repro First <first.queue-repro.invalid>
+List-Unsubscribe: <http://127.0.0.1:8765/fail>
+List-Unsubscribe-Post: List-Unsubscribe=One-Click
+MIME-Version: 1.0
+Content-Type: text/plain; charset=utf-8
+
+Synthetic newsletter used to reproduce a failed first queue item.
+
+From - Thu Aug 20 09:01:00 2026
+From: Queue Repro Second <second@queue-repro.invalid>
+To: ThunderSub Tester <tester@thundersub.invalid>
+Subject: Queue reproduction - second subscription
+Date: Thu, 20 Aug 2026 09:01:00 +1000
+Message-ID: <second@queue-repro.invalid>
+List-ID: Queue Repro Second <second.queue-repro.invalid>
+List-Unsubscribe: <http://127.0.0.1:8765/success>
+List-Unsubscribe-Post: List-Unsubscribe=One-Click
+MIME-Version: 1.0
+Content-Type: text/plain; charset=utf-8
+
+Synthetic newsletter whose unsubscribe request succeeds when processed normally.

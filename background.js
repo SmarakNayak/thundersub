@@ -28,6 +28,7 @@ let scanState = {
   stopped: false
 };
 const SESSION_ID = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
+const ALLOW_LOOPBACK_HTTP_FOR_TESTING = browser.runtime.getManifest().name === 'ThunderSub Test Inbox';
 const cancelledOperations = new Set();
 const UNSCANNABLE_ACCOUNT_TYPES = new Set(['nntp', 'rss']);
 
@@ -1280,7 +1281,9 @@ async function runScan() {
 
 async function unsubOneClick(url, traceId) {
   const startedAt = Date.now();
-  const blockReason = oneClickUrlBlockReason(url);
+  const localTestEndpoint = ALLOW_LOOPBACK_HTTP_FOR_TESTING &&
+    (url === 'http://127.0.0.1:8765/fail' || url === 'http://127.0.0.1:8765/success');
+  const blockReason = localTestEndpoint ? null : oneClickUrlBlockReason(url);
   if (blockReason) {
     tracePhase(traceId, 'one-click-blocked', startedAt, { reason: blockReason });
     throw new Error(`Blocked unsafe one-click unsubscribe URL (${blockReason}) — retry with the web or email method instead.`);
