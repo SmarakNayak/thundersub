@@ -1,0 +1,32 @@
+ThunderSub issues from user feedback
+====================================
+
+1. Scanning large Gmail accounts is too slow
+   A mailbox with roughly 40,000 messages took more than 10 hours to scan.
+   Investigate remote-message network round trips, offline synchronization,
+   concurrency, and per-folder timing diagnostics.
+
+2. Legitimate correspondents are suggested for unsubscribe
+   Senders the user has previously emailed can appear as subscriptions.
+   Investigate scanning Sent mail for correspondent signals and providing an
+   opt-in "trust people I have emailed" filter without hiding real mailing lists.
+
+3. Large review queues require too many clicks
+   Confirming cleanup options for every subscription makes hundreds of results
+   impractical to process. Explore a power-user review mode with keyboard
+   shortcuts, multi-select, and one-action unsubscribe using saved defaults.
+
+4. Some jobs hang indefinitely
+   Unsubscribe or cleanup jobs can remain active until Thunderbird is restarted.
+   Add operation timeouts and enough stage/timing information to identify where
+   a job stopped making progress.
+
+5. Cancellation is unreliable
+   Cancel requests may not take effect, especially while a long Thunderbird API
+   call or network request is active. Define cancellable stages and ensure the UI
+   accurately distinguishes requested, acknowledged, and completed cancellation.
+
+6. Failure messages do not explain the cause
+   Error cards currently provide too little information to diagnose unsubscribe
+   and cleanup failures. Show the failed stage, method, useful sanitized reason,
+   and enough diagnostic context for a bug report.
