@@ -10,6 +10,9 @@ let subsCache = [];
 let dryRun = false;
 let autoSendUnsubscribeEmails = false;
 let defaultUnsubscribeDispose = 'keep';
+let powerUserMode = false;
+let focusedSubscriptionKey = null;
+const selectedSubscriptionKeys = new Set();
 let hasScannedBefore = false;
 let scanInProgress = false;
 let currentRecipientFilter = '';
@@ -462,6 +465,37 @@ async function updateDefaultUnsubscribeDispose(value) {
   }
 }
 
+async function loadPowerUserMode() {
+  try {
+    const result = await bg('getPowerUserMode');
+    powerUserMode = result.powerUserMode === true;
+  } catch (e) {
+    powerUserMode = false;
+  }
+  document.getElementById('power-user-mode-toggle').checked = powerUserMode;
+  renderPowerUserMode();
+}
+
+async function updatePowerUserMode(enabled) {
+  const previous = powerUserMode;
+  try {
+    const result = await bg('setPowerUserMode', { powerUserMode: enabled });
+    powerUserMode = result.powerUserMode === true;
+    if (!powerUserMode) {
+      selectedSubscriptionKeys.clear();
+      focusedSubscriptionKey = null;
+    }
+    renderPowerUserMode();
+    renderFilteredCards();
+    if (powerUserMode) setFocusedCard(focusedSubscriptionKey, true, true);
+    toast(powerUserMode ? 'Power-user review mode enabled' : 'Power-user review mode disabled', 'success');
+  } catch (e) {
+    powerUserMode = previous;
+    document.getElementById('power-user-mode-toggle').checked = powerUserMode;
+    toast('Failed to update power-user mode: ' + (e.message || e), 'error');
+  }
+}
+
 async function doFullReset() {
   const confirmed = confirm('Full reset clears saved scan results and subscription decisions. It does not delete, move, or send emails. Continue?');
   if (!confirmed) return;
@@ -634,12 +668,239 @@ function renderCards(subs) {
   const empty = document.getElementById('empty-state');
 
   if (!subs.length) {
+    focusedSubscriptionKey = null;
+    selectedSubscriptionKeys.clear();
+    updatePowerReviewBar();
     grid.replaceChildren();
     empty.style.display = 'block';
     return;
   }
+  const visibleKeys = new Set(subs.map(subKey));
+  for (const key of selectedSubscriptionKeys) {
+    if (!visibleKeys.has(key)) selectedSubscriptionKeys.delete(key);
+  }
+  if (!focusedSubscriptionKey || !visibleKeys.has(focusedSubscriptionKey)) {
+    focusedSubscriptionKey = powerUserMode ? subKey(subs[0]) : null;
+  }
   empty.style.display = 'none';
   grid.replaceChildren(...subs.map(s => buildCard(s)));
+  updatePowerReviewBar();
+}
+
+function visibleCardKeys() {
+  return [...document.querySelectorAll('#cards-grid .card')].map(card => card.dataset.subscriptionKey);
+}
+
+function renderPowerUserMode() {
+  document.getElementById('power-user-mode-toggle').checked = powerUserMode;
+  document.getElementById('power-review-bar').classList.toggle('open', powerUserMode);
+  if (!powerUserMode) document.getElementById('shortcut-help').classList.remove('open');
+  updatePowerReviewBar();
+}
+
+function updatePowerReviewBar() {
+  const count = selectedSubscriptionKeys.size;
+  const label = document.getElementById('power-selection-count');
+  if (label) label.textContent = `${count} selected`;
+  for (const id of ['power-clear-selection', 'power-keep-selected', 'power-unsub-selected']) {
+    const button = document.getElementById(id);
+    if (button) button.disabled = count === 0;
+  }
+}
+
+function setFocusedCard(subscriptionKey, scroll = true, takeFocus = false) {
+  if (!powerUserMode || !subscriptionKey) return;
+  focusedSubscriptionKey = subscriptionKey;
+  document.querySelectorAll('#cards-grid .card').forEach(card => {
+    card.classList.toggle('keyboard-focus', card.dataset.subscriptionKey === subscriptionKey);
+  });
+  const card = [...document.querySelectorAll('#cards-grid .card')]
+    .find(candidate => candidate.dataset.subscriptionKey === subscriptionKey);
+  if (card && scroll) card.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+  if (card && takeFocus) card.focus({ preventScroll: true });
+}
+
+function moveCardFocus(direction) {
+  const cards = [...document.querySelectorAll('#cards-grid .card')];
+  if (!cards.length) return;
+  const current = cards.find(card => card.dataset.subscriptionKey === focusedSubscriptionKey) || cards[0];
+  const currentRect = current.getBoundingClientRect();
+  const currentX = currentRect.left + currentRect.width / 2;
+  const currentY = currentRect.top + currentRect.height / 2;
+  let best = null;
+  let bestScore = Infinity;
+  for (const card of cards) {
+    if (card === current) continue;
+    const rect = card.getBoundingClientRect();
+    const dx = rect.left + rect.width / 2 - currentX;
+    const dy = rect.top + rect.height / 2 - currentY;
+    const inDirection = direction === 'left' ? dx < -2
+      : direction === 'right' ? dx > 2
+        : direction === 'up' ? dy < -2 : dy > 2;
+    if (!inDirection) continue;
+    const primary = direction === 'left' || direction === 'right' ? Math.abs(dx) : Math.abs(dy);
+    const secondary = direction === 'left' || direction === 'right' ? Math.abs(dy) : Math.abs(dx);
+    const score = primary + secondary * 3;
+    if (score < bestScore) {
+      best = card;
+      bestScore = score;
+    }
+  }
+  if (best) setFocusedCard(best.dataset.subscriptionKey, true, true);
+}
+
+function toggleCardSelection(subscriptionKey) {
+  if (!powerUserMode || !subscriptionKey) return;
+  if (selectedSubscriptionKeys.has(subscriptionKey)) selectedSubscriptionKeys.delete(subscriptionKey);
+  else selectedSubscriptionKeys.add(subscriptionKey);
+  const card = [...document.querySelectorAll('#cards-grid .card')]
+    .find(candidate => candidate.dataset.subscriptionKey === subscriptionKey);
+  if (card) {
+    const selected = selectedSubscriptionKeys.has(subscriptionKey);
+    card.classList.toggle('selected', selected);
+    const button = card.querySelector('.js-card-select');
+    if (button) {
+      button.textContent = selected ? '✓' : '';
+      button.setAttribute('aria-pressed', selected ? 'true' : 'false');
+      button.setAttribute('aria-label', selected ? 'Remove from selection' : 'Add to selection');
+      button.title = selected ? 'Remove from selection (x)' : 'Add to selection (x)';
+    }
+  }
+  updatePowerReviewBar();
+}
+
+function clearCardSelection() {
+  selectedSubscriptionKeys.clear();
+  document.querySelectorAll('#cards-grid .card.selected').forEach(card => card.classList.remove('selected'));
+  document.querySelectorAll('.js-card-select').forEach(button => {
+    button.textContent = '';
+    button.setAttribute('aria-pressed', 'false');
+    button.setAttribute('aria-label', 'Add to selection');
+    button.title = 'Add to selection (x)';
+  });
+  updatePowerReviewBar();
+}
+
+function allSourceFolders(sub) {
+  return (sub.messageGroups || []).map(group => ({
+    accountName: group.accountName,
+    folderName: group.folderName,
+    folderId: group.folderId
+  }));
+}
+
+function enqueueQuickUnsubscribe(sub) {
+  const dispose = defaultUnsubscribeDispose;
+  const selectedFolders = dispose === 'delete' ? allSourceFolders(sub) : [];
+  enqueueActivityJob({
+    ...subRequest(sub),
+    mode: 'unsubscribe',
+    method: getBestMethod(sub),
+    dispose,
+    selectedFolders,
+    destination: null,
+    selectedMessages: selectedMessageCount(sub, selectedFolders)
+  });
+  selectedSubscriptionKeys.delete(subKey(sub));
+  updatePowerReviewBar();
+}
+
+function quickUnsubscribe(subscriptionKey) {
+  const sub = findSubByKey(subscriptionKey);
+  if (!sub || sub.processing) return;
+  if (defaultUnsubscribeDispose === 'move') {
+    toast('Choose a destination to move existing emails', 'info');
+    openUnsubModal(subscriptionKey);
+    return;
+  }
+  enqueueQuickUnsubscribe(sub);
+}
+
+function quickUnsubscribeSelected() {
+  if (defaultUnsubscribeDispose === 'move') {
+    toast('Batch unsubscribe needs Leave or Delete as the saved cleanup default; Move requires a destination', 'info');
+    return;
+  }
+  const subs = [...selectedSubscriptionKeys]
+    .map(findSubByKey)
+    .filter(sub => sub && !sub.processing);
+  if (!subs.length) return;
+  for (const sub of subs) enqueueQuickUnsubscribe(sub);
+  toast(`Queued ${subs.length} unsubscribe ${subs.length === 1 ? 'action' : 'actions'}`, 'success');
+  renderFilteredCards();
+}
+
+async function keepSelected() {
+  const keys = [...selectedSubscriptionKeys];
+  clearCardSelection();
+  for (const key of keys) await doKeep(key);
+}
+
+async function viewSelectedOrFocused() {
+  const keys = selectedSubscriptionKeys.size
+    ? [...selectedSubscriptionKeys]
+    : focusedSubscriptionKey ? [focusedSubscriptionKey] : [];
+  const subs = keys.map(findSubByKey).filter(Boolean);
+  if (!subs.length) return;
+  let failures = 0;
+  for (const selectedSub of subs) {
+    try {
+      await bg('viewSubscription', subRequest(selectedSub));
+    } catch (e) {
+      failures++;
+    }
+  }
+  const opened = subs.length - failures;
+  if (opened > 1) toast(`Opened ${opened} subscriptions in separate tabs`, 'success');
+  if (failures) toast(`Failed to open ${failures} selected ${failures === 1 ? 'subscription' : 'subscriptions'}`, 'error');
+}
+
+function keyboardTargetIsEditable(target) {
+  return target instanceof HTMLElement && (
+    target.isContentEditable || ['INPUT', 'SELECT', 'TEXTAREA', 'BUTTON'].includes(target.tagName)
+  );
+}
+
+function modalIsOpen() {
+  return !!document.querySelector('.modal-overlay.open');
+}
+
+async function handlePowerUserShortcut(event) {
+  if (!powerUserMode || event.ctrlKey || event.metaKey || event.altKey || keyboardTargetIsEditable(event.target) || modalIsOpen()) return;
+  const sub = findSubByKey(focusedSubscriptionKey);
+  if (event.key === '?') {
+    event.preventDefault();
+    document.getElementById('shortcut-help').classList.toggle('open');
+  } else if (event.key === 'h' || event.key === 'ArrowLeft') {
+    event.preventDefault(); moveCardFocus('left');
+  } else if (event.key === 'j' || event.key === 'ArrowDown') {
+    event.preventDefault(); moveCardFocus('down');
+  } else if (event.key === 'k' || event.key === 'ArrowUp') {
+    event.preventDefault(); moveCardFocus('up');
+  } else if (event.key === 'l' || event.key === 'ArrowRight') {
+    event.preventDefault(); moveCardFocus('right');
+  } else if (event.key === 'g') {
+    event.preventDefault(); setFocusedCard(visibleCardKeys()[0], true, true);
+  } else if (event.key === 'G') {
+    const keys = visibleCardKeys();
+    event.preventDefault(); setFocusedCard(keys[keys.length - 1], true, true);
+  } else if ((event.key === 'x' || event.key === ' ') && focusedSubscriptionKey) {
+    event.preventDefault(); toggleCardSelection(focusedSubscriptionKey);
+  } else if (event.key === 'u' && sub) {
+    event.preventDefault();
+    if (selectedSubscriptionKeys.size) quickUnsubscribeSelected();
+    else quickUnsubscribe(focusedSubscriptionKey);
+  } else if (event.key === 'i' && sub) {
+    event.preventDefault();
+    if (selectedSubscriptionKeys.size) await keepSelected();
+    else await doKeep(focusedSubscriptionKey);
+  } else if (event.key === 'v' && sub) {
+    event.preventDefault();
+    await viewSelectedOrFocused();
+  } else if (event.key === 'Escape') {
+    clearCardSelection();
+    document.getElementById('shortcut-help').classList.remove('open');
+  }
 }
 
 // ── Message group helpers ─────────────────────────────────────────────────────
@@ -733,6 +994,21 @@ function getAvailableMethods(sub) {
   }
   for (const url of (sub.embeddedUrls || [sub.embeddedUrl])) add('embedded', url);
   return methods;
+}
+
+function powerActionDescription(sub) {
+  const method = getBestMethod(sub);
+  if (!method) return { text: 'No unsubscribe destination was detected.', title: '' };
+  if (method.type === 'mail') {
+    const address = method.url.replace(/^mailto:/i, '').split('?')[0];
+    return { text: `Unsubscribe email: ${address}`, title: method.url };
+  }
+  try {
+    const parsed = new URL(method.url);
+    return { text: `Unsubscribe website: ${parsed.hostname}`, title: method.url };
+  } catch (e) {
+    return { text: `Unsubscribe destination: ${truncateMiddle(method.url, 72)}`, title: method.url };
+  }
 }
 
 function buildDetectionEvidence(s) {
@@ -836,8 +1112,21 @@ function buildCard(s) {
   const dismissable = s.decision === 'unsubscribed' || s.decision === 'error';
   const attrs = { 'data-subscription-key': subKey(s) };
 
-  return el('div', { class: `card${s.processing ? ' processing' : ''}`, id: `card-${id}`, ...attrs },
+  const key = subKey(s);
+  const selected = selectedSubscriptionKeys.has(key);
+  const focused = powerUserMode && focusedSubscriptionKey === key;
+  const powerDescription = powerUserMode ? powerActionDescription(s) : null;
+  return el('div', {
+    class: `card${s.processing ? ' processing' : ''}${selected ? ' selected' : ''}${focused ? ' keyboard-focus' : ''}`,
+    id: `card-${id}`, tabindex: powerUserMode ? '0' : null, ...attrs
+  },
     el('div', { class: 'card-body' },
+      powerUserMode && el('button', {
+        class: 'card-select js-card-select',
+        title: selected ? 'Remove from selection (x)' : 'Add to selection (x)',
+        'aria-label': selected ? 'Remove from selection' : 'Add to selection',
+        'aria-pressed': selected ? 'true' : 'false', ...attrs
+      }, selected ? '✓' : ''),
       dismissable && el('button', {
         class: 'card-dismiss js-dismiss',
         title: 'Dismiss and stop tracking this subscription',
@@ -862,6 +1151,8 @@ function buildCard(s) {
       s.recipientAddress && el('div', { class: 'card-accounts', title: `Delivered to ${s.recipientAddress}` }, `→ ${s.recipientAddress}`),
       s.sampleSubject && el('div', { class: 'card-subject', title: s.sampleSubject }, `"${s.sampleSubject.substring(0, 80)}"`),
       s.error?.message && el('div', { class: 'card-error', title: s.error.message }, `${s.error.stage || 'Error'}: ${s.error.message}`),
+      powerDescription && (s.decision === 'pending' || s.decision === 'error') &&
+        el('div', { class: 'power-action-note', title: powerDescription.title }, powerDescription.text),
       SHOW_DETECTION_UI && el('button', { class: 'evidence-toggle js-evidence-toggle', type: 'button' }, 'Why detected?')),
     SHOW_DETECTION_UI && el('div', { class: 'detection-evidence' }, buildDetectionEvidence(s)),
     el('div', { class: 'card-actions' }, buildActions(s)));
@@ -870,8 +1161,16 @@ function buildCard(s) {
 // ── Event delegation (attached once in DOMContentLoaded) ─────────────────────
 function attachCardListeners() {
   document.getElementById('cards-grid').addEventListener('click', async (e) => {
+    const card = e.target.closest('.card');
+    if (powerUserMode && card) setFocusedCard(card.dataset.subscriptionKey, false, true);
     const btn = e.target.closest('button');
     if (!btn) return;
+
+    if (btn.classList.contains('js-card-select')) {
+      toggleCardSelection(btn.dataset.subscriptionKey);
+      setFocusedCard(btn.dataset.subscriptionKey, false, true);
+      return;
+    }
 
     if (!btn.classList.contains('js-keep-menu-toggle')) {
       closeKeepMenus();
@@ -923,7 +1222,8 @@ function attachCardListeners() {
     }
 
     if (btn.classList.contains('js-open-modal')) {
-      openUnsubModal(btn.dataset.subscriptionKey);
+      if (powerUserMode) quickUnsubscribe(btn.dataset.subscriptionKey);
+      else openUnsubModal(btn.dataset.subscriptionKey);
       return;
     }
 
@@ -2167,6 +2467,7 @@ function pollScanStatus() {
 // ── Init ─────────────────────────────────────────────────────────────────────
 document.addEventListener('DOMContentLoaded', async () => {
   window.addEventListener('resize', positionToastContainer);
+  document.addEventListener('keydown', handlePowerUserShortcut);
   document.addEventListener('click', (e) => {
     if (!e.target.closest('.keep-split')) closeKeepMenus();
   });
@@ -2202,6 +2503,12 @@ document.addEventListener('DOMContentLoaded', async () => {
   document.getElementById('default-unsub-dispose-select').addEventListener('change', (e) => {
     updateDefaultUnsubscribeDispose(e.target.value);
   });
+  document.getElementById('power-user-mode-toggle').addEventListener('change', (e) => {
+    updatePowerUserMode(e.target.checked);
+  });
+  document.getElementById('power-clear-selection').addEventListener('click', clearCardSelection);
+  document.getElementById('power-keep-selected').addEventListener('click', keepSelected);
+  document.getElementById('power-unsub-selected').addEventListener('click', quickUnsubscribeSelected);
   document.getElementById('full-reset-btn').addEventListener('click', doFullReset);
   document.getElementById('activity-list').addEventListener('click', (e) => {
     const dismissBtn = e.target.closest('.js-dismiss-activity');
@@ -2282,6 +2589,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   await loadDryRun();
   await loadAutoSendUnsubscribeEmails();
   await loadDefaultUnsubscribeDispose();
+  await loadPowerUserMode();
   await loadStats();
   await loadSubs('pending');
 

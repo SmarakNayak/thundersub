@@ -206,6 +206,17 @@ async function setDefaultUnsubscribeDispose(defaultUnsubscribeDispose) {
   return { defaultUnsubscribeDispose: normalized };
 }
 
+async function getPowerUserMode() {
+  const result = await browser.storage.local.get('powerUserMode');
+  return result.powerUserMode === true;
+}
+
+async function setPowerUserMode(powerUserMode) {
+  const enabled = powerUserMode === true;
+  await browser.storage.local.set({ powerUserMode: enabled });
+  return { powerUserMode: enabled };
+}
+
 async function fullReset() {
   if (scanState.status === 'scanning') {
     throw new Error('Stop the active scan before running a full reset.');
@@ -1848,6 +1859,12 @@ function handleRuntimeMessage(request, sender) {
 
     case 'setDefaultUnsubscribeDispose':
       return setDefaultUnsubscribeDispose(request.defaultUnsubscribeDispose);
+
+    case 'getPowerUserMode':
+      return getPowerUserMode().then(powerUserMode => ({ powerUserMode }));
+
+    case 'setPowerUserMode':
+      return setPowerUserMode(request.powerUserMode);
 
     case 'fullReset':
       return fullReset();

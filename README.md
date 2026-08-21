@@ -55,6 +55,9 @@ For each sender, ThunderSub auto-selects the best available method:
 
 Did a one-click request bounce? Hit **Retry** and pick any other detected method from a dropdown.
 
+### ⌨️ Power-user review mode
+Enable **Power-user review mode** under Advanced Settings to work through large queues without opening the confirmation dialog for every sender. It uses your saved cleanup default and adds multi-select plus Vim-style shortcuts: `h`/`j`/`k`/`l` (or the arrow keys) to move, Space or `x` to select, `u` to unsubscribe, `i` to keep, and `v` to view messages. A saved **Move emails** action still asks for a destination; **Leave emails** and **Delete emails** can be queued immediately.
+
 ### 🧹 Cleanup, not just unsubscribe
 Unsubscribing stops *future* email. ThunderSub also handles the past:
 
