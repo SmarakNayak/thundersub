@@ -78,16 +78,19 @@
       </span>
       <input type="checkbox" id="auto-send-email-toggle">
     </label>
-    <label class="settings-select">
+    <div class="settings-select">
       <span>
         <strong>Default unsubscribe cleanup</strong>
       </span>
-      <select id="default-unsub-dispose-select">
-        <option value="keep">Leave emails</option>
-        <option value="move">Move emails</option>
-        <option value="delete">Delete emails</option>
-      </select>
-    </label>
+      <div class="settings-select-row">
+        <select id="default-unsub-dispose-select">
+          <option value="keep">Leave emails</option>
+          <option value="move">Move emails</option>
+          <option value="delete">Delete emails</option>
+        </select>
+        <button id="move-destinations-btn" type="button" title="Configure move folders by identity" aria-label="Configure move folders by identity" aria-expanded="false">⚙</button>
+      </div>
+    </div>
     <label class="settings-toggle">
       <span>
         <strong>Quick Review mode</strong>
@@ -97,6 +100,15 @@
     </label>
     <button id="full-reset-btn">Full Reset</button>
   </div>
+</div>
+
+<div id="move-destinations-popover" role="dialog" aria-label="Move destinations">
+  <div class="move-destinations-header">
+    <strong>Move destinations</strong>
+    <button id="move-destinations-close" type="button" aria-label="Close">×</button>
+  </div>
+  <div class="move-destinations-hint">Choose a default folder for each identity. Unconfigured identities ask each time.</div>
+  <div id="move-destinations-list"></div>
 </div>
 
 <div id="main">

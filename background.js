@@ -206,6 +206,38 @@ async function setDefaultUnsubscribeDispose(defaultUnsubscribeDispose) {
   return { defaultUnsubscribeDispose: normalized };
 }
 
+function normalizeMoveDestinationsByIdentity(value) {
+  const normalized = {};
+  if (!value || typeof value !== 'object') return normalized;
+  for (const [address, destination] of Object.entries(value)) {
+    const identity = String(address || '').trim().toLowerCase();
+    if (!identity || !destination || typeof destination !== 'object') continue;
+    const id = String(destination.id || '').trim();
+    const accountId = String(destination.accountId || '').trim();
+    if (!id || !accountId) continue;
+    normalized[identity] = {
+      id,
+      accountId,
+      accountName: String(destination.accountName || ''),
+      folderName: String(destination.folderName || ''),
+      folderPath: String(destination.folderPath || ''),
+      label: String(destination.label || '')
+    };
+  }
+  return normalized;
+}
+
+async function getMoveDestinationsByIdentity() {
+  const result = await browser.storage.local.get('moveDestinationsByIdentity');
+  return normalizeMoveDestinationsByIdentity(result.moveDestinationsByIdentity);
+}
+
+async function setMoveDestinationsByIdentity(moveDestinationsByIdentity) {
+  const normalized = normalizeMoveDestinationsByIdentity(moveDestinationsByIdentity);
+  await browser.storage.local.set({ moveDestinationsByIdentity: normalized });
+  return { moveDestinationsByIdentity: normalized };
+}
+
 async function getQuickReviewMode() {
   const result = await browser.storage.local.get('quickReviewMode');
   return result.quickReviewMode === true;
@@ -1728,6 +1760,11 @@ async function getFolderTree() {
       accountId: account.id,
       accountName: account.name,
       rootFolderId: account.rootFolder ? account.rootFolder.id : null,
+      identities: (account.identities || []).map(identity => ({
+        id: identity.id,
+        name: identity.name || '',
+        email: identity.email || ''
+      })),
       folders: []
     };
 
@@ -1859,6 +1896,12 @@ function handleRuntimeMessage(request, sender) {
 
     case 'setDefaultUnsubscribeDispose':
       return setDefaultUnsubscribeDispose(request.defaultUnsubscribeDispose);
+
+    case 'getMoveDestinationsByIdentity':
+      return getMoveDestinationsByIdentity().then(moveDestinationsByIdentity => ({ moveDestinationsByIdentity }));
+
+    case 'setMoveDestinationsByIdentity':
+      return setMoveDestinationsByIdentity(request.moveDestinationsByIdentity);
 
     case 'getQuickReviewMode':
       return getQuickReviewMode().then(quickReviewMode => ({ quickReviewMode }));

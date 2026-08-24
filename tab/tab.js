@@ -10,6 +10,7 @@ let subsCache = [];
 let dryRun = false;
 let autoSendUnsubscribeEmails = false;
 let defaultUnsubscribeDispose = 'keep';
+let moveDestinationsByIdentity = {};
 let quickReviewMode = false;
 let focusedSubscriptionKey = null;
 const selectedSubscriptionKeys = new Set();
@@ -446,6 +447,7 @@ async function loadDefaultUnsubscribeDispose() {
     defaultUnsubscribeDispose = 'keep';
     document.getElementById('default-unsub-dispose-select').value = defaultUnsubscribeDispose;
   }
+  renderMoveDestinationsButton();
 }
 
 async function updateDefaultUnsubscribeDispose(value) {
@@ -456,13 +458,142 @@ async function updateDefaultUnsubscribeDispose(value) {
     });
     defaultUnsubscribeDispose = normalizeDefaultUnsubscribeDispose(result.defaultUnsubscribeDispose);
     document.getElementById('default-unsub-dispose-select').value = defaultUnsubscribeDispose;
+    renderMoveDestinationsButton();
+    renderFilteredCards();
     const label = DISPOSE_SETTING_LABELS[defaultUnsubscribeDispose] || defaultUnsubscribeDispose;
     toast(`Default unsubscribe cleanup: ${label}`, 'success');
   } catch (e) {
     defaultUnsubscribeDispose = previous;
     document.getElementById('default-unsub-dispose-select').value = defaultUnsubscribeDispose;
+    renderMoveDestinationsButton();
     toast('Failed to update default cleanup setting: ' + (e.message || e), 'error');
   }
+}
+
+function identityAddress(value) {
+  return String(value || '').trim().toLowerCase();
+}
+
+async function loadMoveDestinationsByIdentity() {
+  try {
+    const result = await bg('getMoveDestinationsByIdentity');
+    moveDestinationsByIdentity = result.moveDestinationsByIdentity || {};
+  } catch (e) {
+    moveDestinationsByIdentity = {};
+  }
+}
+
+function renderMoveDestinationsButton() {
+  const button = document.getElementById('move-destinations-btn');
+  if (!button) return;
+  const visible = defaultUnsubscribeDispose === 'move';
+  button.classList.toggle('visible', visible);
+  if (!visible) closeMoveDestinationsPopover();
+}
+
+function moveDestinationFolderDisabled(folder) {
+  const name = String(folder.name || '').toLowerCase();
+  const path = String(folder.path || '').toLowerCase();
+  return name === '[gmail]' || path === '[gmail]' || path === '/[gmail]' ||
+    name === 'all mail' || path === 'all mail' || path.endsWith('/all mail') ||
+    folder.type === 'virtual';
+}
+
+function flattenMoveFolders(account, folders, depth = 0) {
+  const result = [];
+  for (const folder of (folders || [])) {
+    if (!moveDestinationFolderDisabled(folder)) {
+      const folderPath = displayFolderPath(folder.path, folder.name);
+      result.push({
+        id: folder.id,
+        accountId: account.accountId,
+        accountName: account.accountName,
+        folderName: folder.name,
+        folderPath,
+        label: `${account.accountName} | ${folderPath}`,
+        optionLabel: `${'  '.repeat(depth)}${folder.name}`
+      });
+    }
+    result.push(...flattenMoveFolders(account, folder.subFolders, depth + 1));
+  }
+  return result;
+}
+
+async function saveMoveDestinations() {
+  const result = await bg('setMoveDestinationsByIdentity', { moveDestinationsByIdentity });
+  moveDestinationsByIdentity = result.moveDestinationsByIdentity || {};
+  renderFilteredCards();
+}
+
+function positionMoveDestinationsPopover() {
+  const button = document.getElementById('move-destinations-btn');
+  const popover = document.getElementById('move-destinations-popover');
+  if (!button || !popover) return;
+  const rect = button.getBoundingClientRect();
+  const width = Math.min(360, window.innerWidth - 24);
+  popover.style.width = `${width}px`;
+  popover.style.left = `${Math.min(rect.right + 8, window.innerWidth - width - 12)}px`;
+  popover.style.top = `${Math.max(12, Math.min(rect.top, window.innerHeight - Math.min(520, popover.scrollHeight || 520) - 12))}px`;
+}
+
+async function openMoveDestinationsPopover(focusAddress = '') {
+  const popover = document.getElementById('move-destinations-popover');
+  const button = document.getElementById('move-destinations-btn');
+  popover.classList.add('open');
+  button.setAttribute('aria-expanded', 'true');
+  document.getElementById('move-destinations-list').replaceChildren(
+    el('div', { class: 'move-destinations-empty' }, 'Loading identities and folders...'));
+  positionMoveDestinationsPopover();
+  try {
+    if (!folderTreeCache) folderTreeCache = await bg('getFolderTree');
+    const rows = [];
+    const seen = new Set();
+    for (const account of (folderTreeCache || [])) {
+      const folders = flattenMoveFolders(account, account.folders);
+      for (const identity of (account.identities || [])) {
+        const address = identityAddress(identity.email);
+        if (!address || seen.has(address)) continue;
+        seen.add(address);
+        const select = el('select', { 'data-identity-address': address, 'aria-label': `Move folder for ${address}` },
+          el('option', { value: '' }, 'Ask each time'),
+          folders.map(folder => el('option', { value: folder.id }, folder.optionLabel)));
+        const saved = moveDestinationsByIdentity[address];
+        select.value = saved && folders.some(folder => folder.id === saved.id) ? saved.id : '';
+        select.addEventListener('change', async () => {
+          const destination = folders.find(folder => folder.id === select.value);
+          if (destination) moveDestinationsByIdentity[address] = destination;
+          else delete moveDestinationsByIdentity[address];
+          try {
+            await saveMoveDestinations();
+          } catch (e) {
+            toast('Failed to save move destination: ' + (e.message || e), 'error');
+          }
+        });
+        rows.push(el('label', { class: 'move-destination-row' },
+          el('span', { class: 'move-destination-identity' },
+            el('strong', { title: address }, address),
+            el('span', { class: 'move-destination-account', title: account.accountName }, account.accountName)),
+          select));
+      }
+    }
+    document.getElementById('move-destinations-list').replaceChildren(
+      ...(rows.length ? rows : [el('div', { class: 'move-destinations-empty' }, 'No email identities found.')]))
+    positionMoveDestinationsPopover();
+    const focusSelect = focusAddress && document.querySelector(
+      `#move-destinations-list select[data-identity-address="${CSS.escape(identityAddress(focusAddress))}"]`);
+    if (focusSelect) {
+      focusSelect.focus();
+      focusSelect.scrollIntoView({ block: 'nearest' });
+    }
+  } catch (e) {
+    document.getElementById('move-destinations-list').replaceChildren(
+      el('div', { class: 'move-destinations-empty' }, 'Failed to load identities and folders.'));
+  }
+}
+
+function closeMoveDestinationsPopover() {
+  document.getElementById('move-destinations-popover')?.classList.remove('open');
+  document.getElementById('move-destinations-btn')?.setAttribute('aria-expanded', 'false');
 }
 
 async function loadQuickReviewMode() {
@@ -812,43 +943,66 @@ function allSourceFolders(sub) {
   }));
 }
 
-function enqueueQuickUnsubscribe(sub) {
+function enqueueQuickUnsubscribe(sub, destination = null) {
   const dispose = defaultUnsubscribeDispose;
-  const selectedFolders = dispose === 'delete' ? allSourceFolders(sub) : [];
+  const selectedFolders = (dispose === 'delete' || dispose === 'move') ? allSourceFolders(sub) : [];
   enqueueActivityJob({
     ...subRequest(sub),
     mode: 'unsubscribe',
     method: getBestMethod(sub),
     dispose,
     selectedFolders,
-    destination: null,
+    destination,
     selectedMessages: selectedMessageCount(sub, selectedFolders)
   });
   selectedSubscriptionKeys.delete(subKey(sub));
   updateQuickReviewBar();
 }
 
-function quickUnsubscribe(subscriptionKey) {
+async function configuredMoveDestination(sub) {
+  const address = identityAddress(sub.accountIdentityAddress);
+  const saved = moveDestinationsByIdentity[address];
+  if (!address || !saved) return null;
+  if (!folderTreeCache) folderTreeCache = await bg('getFolderTree');
+  const account = (folderTreeCache || []).find(candidate => candidate.accountId === saved.accountId);
+  if (!account) return null;
+  return flattenMoveFolders(account, account.folders).find(folder => folder.id === saved.id) || null;
+}
+
+async function quickUnsubscribe(subscriptionKey) {
   const sub = findSubByKey(subscriptionKey);
   if (!sub || sub.processing) return;
   if (defaultUnsubscribeDispose === 'move') {
-    toast('Choose a destination to move existing emails', 'info');
-    openUnsubModal(subscriptionKey);
+    const destination = await configuredMoveDestination(sub);
+    if (!destination) {
+      toast(`Choose a move destination for ${sub.accountIdentityAddress || 'this identity'}`, 'info');
+      openUnsubModal(subscriptionKey);
+      return;
+    }
+    enqueueQuickUnsubscribe(sub, destination);
     return;
   }
   enqueueQuickUnsubscribe(sub);
 }
 
-function quickUnsubscribeSelected() {
-  if (defaultUnsubscribeDispose === 'move') {
-    toast('Batch unsubscribe needs Leave or Delete as the saved cleanup default; Move requires a destination', 'info');
-    return;
-  }
+async function quickUnsubscribeSelected() {
   const subs = [...selectedSubscriptionKeys]
     .map(findSubByKey)
     .filter(sub => sub && !sub.processing);
   if (!subs.length) return;
-  for (const sub of subs) enqueueQuickUnsubscribe(sub);
+  if (defaultUnsubscribeDispose === 'move') {
+    const destinations = await Promise.all(subs.map(configuredMoveDestination));
+    const missingIndex = destinations.findIndex(destination => !destination);
+    if (missingIndex >= 0) {
+      const missing = subs[missingIndex];
+      toast(`Batch unsubscribe needs a move destination for ${missing.accountIdentityAddress || 'every identity'}`, 'info');
+      await openMoveDestinationsPopover(missing.accountIdentityAddress);
+      return;
+    }
+    subs.forEach((sub, index) => enqueueQuickUnsubscribe(sub, destinations[index]));
+  } else {
+    for (const sub of subs) enqueueQuickUnsubscribe(sub);
+  }
   toast(`Queued ${subs.length} unsubscribe ${subs.length === 1 ? 'action' : 'actions'}`, 'success');
   renderFilteredCards();
 }
@@ -1125,8 +1279,8 @@ async function runQuickReviewCommand(command) {
   } else if (command === 'unsubscribe' && sub) {
     if (sub.decision === 'pending') {
       if (!quickReviewMode) openUnsubModal(focusedSubscriptionKey);
-      else if (selectedSubscriptionKeys.size) quickUnsubscribeSelected();
-      else quickUnsubscribe(focusedSubscriptionKey);
+      else if (selectedSubscriptionKeys.size) await quickUnsubscribeSelected();
+      else await quickUnsubscribe(focusedSubscriptionKey);
     } else if (sub.decision === 'unsubscribed' || sub.decision === 'error') {
       openUnsubModal(focusedSubscriptionKey, true);
     }
@@ -1286,15 +1440,19 @@ function getAvailableMethods(sub) {
 function quickReviewActionDescription(sub) {
   const method = getBestMethod(sub);
   if (!method) return { text: 'No unsubscribe destination was detected.', title: '' };
+  const moveDestination = defaultUnsubscribeDispose === 'move'
+    ? moveDestinationsByIdentity[identityAddress(sub.accountIdentityAddress)]
+    : null;
+  const cleanupText = moveDestination ? ` · Move emails to ${moveDestination.folderPath || moveDestination.folderName}` : '';
   if (method.type === 'mail') {
     const address = method.url.replace(/^mailto:/i, '').split('?')[0];
-    return { text: `Unsubscribe email: ${address}`, title: method.url };
+    return { text: `Unsubscribe email: ${address}${cleanupText}`, title: method.url };
   }
   try {
     const parsed = new URL(method.url);
-    return { text: `Unsubscribe website: ${parsed.hostname}`, title: method.url };
+    return { text: `Unsubscribe website: ${parsed.hostname}${cleanupText}`, title: method.url };
   } catch (e) {
-    return { text: `Unsubscribe destination: ${truncateMiddle(method.url, 72)}`, title: method.url };
+    return { text: `Unsubscribe destination: ${truncateMiddle(method.url, 72)}${cleanupText}`, title: method.url };
   }
 }
 
@@ -1525,7 +1683,7 @@ function attachCardListeners() {
     }
 
     if (btn.classList.contains('js-open-modal')) {
-      if (quickReviewMode) quickUnsubscribe(btn.dataset.subscriptionKey);
+      if (quickReviewMode) await quickUnsubscribe(btn.dataset.subscriptionKey);
       else openUnsubModal(btn.dataset.subscriptionKey);
       return;
     }
@@ -1943,6 +2101,11 @@ function renderRelevantFolderTree() {
   const sub = findSubByKey(modalSubscriptionKey);
   const relevantAccounts = new Set((sub?.messageGroups || []).map(g => g.accountName));
   renderFolderTree((folderTreeCache || []).filter(a => relevantAccounts.has(a.accountName)));
+  const saved = moveDestinationsByIdentity[identityAddress(sub?.accountIdentityAddress)];
+  if (saved) {
+    const radio = document.querySelector(`#modal-dest-tree input[name="dest-folder"][value="${CSS.escape(saved.id)}"]`);
+    if (radio && radio.dataset.moveDisabled !== '1') radio.checked = true;
+  }
 }
 
 function renderFolderTree(tree) {
@@ -2765,7 +2928,12 @@ function pollScanStatus() {
 
 // ── Init ─────────────────────────────────────────────────────────────────────
 document.addEventListener('DOMContentLoaded', async () => {
-  window.addEventListener('resize', positionToastContainer);
+  window.addEventListener('resize', () => {
+    positionToastContainer();
+    if (document.getElementById('move-destinations-popover').classList.contains('open')) {
+      positionMoveDestinationsPopover();
+    }
+  });
   window.addEventListener('focus', updateKeyboardShortcutHint);
   window.addEventListener('blur', updateKeyboardShortcutHint);
   updateKeyboardShortcutHint();
@@ -2777,6 +2945,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   });
   document.addEventListener('click', (e) => {
     if (!e.target.closest('.keep-split')) closeKeepMenus();
+    if (!e.target.closest('#move-destinations-popover, #move-destinations-btn')) closeMoveDestinationsPopover();
   });
   document.getElementById('scan-btn').addEventListener('click', startScan);
 
@@ -2809,6 +2978,19 @@ document.addEventListener('DOMContentLoaded', async () => {
   });
   document.getElementById('default-unsub-dispose-select').addEventListener('change', (e) => {
     updateDefaultUnsubscribeDispose(e.target.value);
+  });
+  document.getElementById('move-destinations-btn').addEventListener('click', () => {
+    const popover = document.getElementById('move-destinations-popover');
+    if (popover.classList.contains('open')) closeMoveDestinationsPopover();
+    else openMoveDestinationsPopover();
+  });
+  document.getElementById('move-destinations-close').addEventListener('click', closeMoveDestinationsPopover);
+  document.getElementById('move-destinations-popover').addEventListener('keydown', (e) => {
+    if (e.key !== 'Escape') return;
+    e.preventDefault();
+    e.stopPropagation();
+    closeMoveDestinationsPopover();
+    document.getElementById('move-destinations-btn').focus();
   });
   document.getElementById('quick-review-mode-toggle').addEventListener('change', (e) => {
     updateQuickReviewMode(e.target.checked);
@@ -2895,6 +3077,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 
   await loadDryRun();
   await loadAutoSendUnsubscribeEmails();
+  await loadMoveDestinationsByIdentity();
   await loadDefaultUnsubscribeDispose();
   await loadQuickReviewMode();
   await loadStats();

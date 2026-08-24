@@ -57,6 +57,26 @@ body{display:flex;overflow:hidden}
   background:var(--card);color:var(--text);font:inherit;font-size:12px;outline:none;
 }
 .settings-select select:focus{border-color:var(--accent)}
+.settings-select-row{display:flex;gap:6px;align-items:center}
+.settings-select-row select{min-width:0;flex:1}
+#move-destinations-btn{display:none;width:32px;height:32px;flex:0 0 32px;border:1px solid var(--border);border-radius:7px;background:var(--card);color:var(--muted);cursor:pointer;font-size:15px}
+#move-destinations-btn.visible{display:block}
+#move-destinations-btn:hover,#move-destinations-btn[aria-expanded="true"]{border-color:var(--accent);color:var(--text);background:rgba(99,102,241,.14)}
+#move-destinations-popover{display:none;position:fixed;width:360px;max-width:calc(100vw - 24px);max-height:min(520px,calc(100vh - 24px));overflow-y:auto;padding:14px;border:1px solid var(--border);border-radius:10px;background:var(--sidebar);box-shadow:0 12px 36px rgba(0,0,0,.5);z-index:9000}
+#move-destinations-popover.open{display:block}
+.move-destinations-header{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:6px}
+.move-destinations-header strong{font-size:14px}
+#move-destinations-close{border:0;background:transparent;color:var(--muted);font-size:20px;line-height:1;cursor:pointer}
+#move-destinations-close:hover{color:var(--text)}
+.move-destinations-hint{color:var(--muted);font-size:11px;line-height:1.4;margin-bottom:12px}
+#move-destinations-list{display:flex;flex-direction:column;gap:10px}
+.move-destination-row{display:flex;flex-direction:column;gap:5px}
+.move-destination-identity{display:flex;justify-content:space-between;gap:8px;font-size:11px}
+.move-destination-identity strong{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.move-destination-account{color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.move-destination-row select{width:100%;padding:7px 28px 7px 9px;border:1px solid var(--border);border-radius:7px;background:var(--card);color:var(--text);font:inherit;font-size:12px;outline:none}
+.move-destination-row select:focus{border-color:var(--accent)}
+.move-destinations-empty{color:var(--muted);font-size:12px;padding:8px 0}
 .scan-controls{display:none;gap:6px;margin-top:6px}
 #pause-btn{flex:1;padding:7px;border:1px solid var(--border);border-radius:8px;background:transparent;color:var(--text);font-size:12px;font-weight:600;cursor:pointer;transition:all .15s}
 #pause-btn:hover{background:var(--border)}
