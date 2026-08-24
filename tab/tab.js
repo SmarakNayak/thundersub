@@ -10,7 +10,7 @@ let subsCache = [];
 let dryRun = false;
 let autoSendUnsubscribeEmails = false;
 let defaultUnsubscribeDispose = 'keep';
-let powerUserMode = false;
+let quickReviewMode = false;
 let focusedSubscriptionKey = null;
 const selectedSubscriptionKeys = new Set();
 let hasScannedBefore = false;
@@ -465,34 +465,33 @@ async function updateDefaultUnsubscribeDispose(value) {
   }
 }
 
-async function loadPowerUserMode() {
+async function loadQuickReviewMode() {
   try {
-    const result = await bg('getPowerUserMode');
-    powerUserMode = result.powerUserMode === true;
+    const result = await bg('getQuickReviewMode');
+    quickReviewMode = result.quickReviewMode === true;
   } catch (e) {
-    powerUserMode = false;
+    quickReviewMode = false;
   }
-  document.getElementById('power-user-mode-toggle').checked = powerUserMode;
-  renderPowerUserMode();
+  document.getElementById('quick-review-mode-toggle').checked = quickReviewMode;
+  renderQuickReviewMode();
 }
 
-async function updatePowerUserMode(enabled) {
-  const previous = powerUserMode;
+async function updateQuickReviewMode(enabled) {
+  const previous = quickReviewMode;
   try {
-    const result = await bg('setPowerUserMode', { powerUserMode: enabled });
-    powerUserMode = result.powerUserMode === true;
-    if (!powerUserMode) {
+    const result = await bg('setQuickReviewMode', { quickReviewMode: enabled });
+    quickReviewMode = result.quickReviewMode === true;
+    if (!quickReviewMode) {
       selectedSubscriptionKeys.clear();
-      focusedSubscriptionKey = null;
     }
-    renderPowerUserMode();
+    renderQuickReviewMode();
     renderFilteredCards();
-    if (powerUserMode) setFocusedCard(focusedSubscriptionKey, true, true);
-    toast(powerUserMode ? 'Power-user review mode enabled' : 'Power-user review mode disabled', 'success');
+    if (quickReviewMode) setFocusedCard(focusedSubscriptionKey, true, true);
+    toast(quickReviewMode ? 'Quick Review mode enabled' : 'Quick Review mode disabled', 'success');
   } catch (e) {
-    powerUserMode = previous;
-    document.getElementById('power-user-mode-toggle').checked = powerUserMode;
-    toast('Failed to update power-user mode: ' + (e.message || e), 'error');
+    quickReviewMode = previous;
+    document.getElementById('quick-review-mode-toggle').checked = quickReviewMode;
+    toast('Failed to update Quick Review mode: ' + (e.message || e), 'error');
   }
 }
 
@@ -541,6 +540,7 @@ async function loadStats() {
     document.getElementById('fb-keep').textContent = s.kept;
     document.getElementById('fb-unsubscribed').textContent = s.unsubscribed;
     document.getElementById('fb-error').textContent = s.error || 0;
+    updateErrorBadgeState();
     hasScannedBefore = s.total > 0;
     refreshScanButtonLabel();
     const lastEl = document.getElementById('scan-last');
@@ -548,6 +548,12 @@ async function loadStats() {
       lastEl.textContent = (!scanInProgress && s.lastScanAt) ? `Last scanned ${formatLastScan(s.lastScanAt)}` : '';
     }
   } catch (e) { /* ignore */ }
+}
+
+function updateErrorBadgeState() {
+  const badge = document.getElementById('fb-error');
+  const count = Number.parseInt(badge?.textContent || '0', 10);
+  badge?.classList.toggle('has-errors', Number.isFinite(count) && count > 0);
 }
 
 function updateDecisionStats(previousDecision, nextDecision) {
@@ -567,6 +573,7 @@ function updateDecisionStats(previousDecision, nextDecision) {
   };
   adjust(previousDecision, -1);
   adjust(nextDecision, 1);
+  updateErrorBadgeState();
 }
 
 function adjustStat(ids, amount) {
@@ -575,6 +582,7 @@ function adjustStat(ids, amount) {
     const value = Number.parseInt(el?.textContent || '', 10);
     if (el && Number.isFinite(value)) el.textContent = Math.max(0, value + amount);
   }
+  updateErrorBadgeState();
 }
 
 function removeCachedSubscription(sub, dismissed = false) {
@@ -666,11 +674,12 @@ function renderFilteredCards() {
 function renderCards(subs) {
   const grid = document.getElementById('cards-grid');
   const empty = document.getElementById('empty-state');
+  const restoreKeyboardFocus = !!document.activeElement?.closest?.('#cards-grid .card');
 
   if (!subs.length) {
     focusedSubscriptionKey = null;
     selectedSubscriptionKeys.clear();
-    updatePowerReviewBar();
+    updateQuickReviewBar();
     grid.replaceChildren();
     empty.style.display = 'block';
     return;
@@ -680,44 +689,54 @@ function renderCards(subs) {
     if (!visibleKeys.has(key)) selectedSubscriptionKeys.delete(key);
   }
   if (!focusedSubscriptionKey || !visibleKeys.has(focusedSubscriptionKey)) {
-    focusedSubscriptionKey = powerUserMode ? subKey(subs[0]) : null;
+    focusedSubscriptionKey = subKey(subs[0]);
   }
   empty.style.display = 'none';
   grid.replaceChildren(...subs.map(s => buildCard(s)));
-  updatePowerReviewBar();
+  updateQuickReviewBar();
+  if (restoreKeyboardFocus) {
+    setFocusedCard(focusedSubscriptionKey, false, true);
+  } else {
+    updateKeyboardFocusStyle();
+  }
 }
 
 function visibleCardKeys() {
   return [...document.querySelectorAll('#cards-grid .card')].map(card => card.dataset.subscriptionKey);
 }
 
-function renderPowerUserMode() {
-  document.getElementById('power-user-mode-toggle').checked = powerUserMode;
-  document.getElementById('power-review-bar').classList.toggle('open', powerUserMode);
-  if (!powerUserMode) document.getElementById('shortcut-help').classList.remove('open');
-  updatePowerReviewBar();
+function renderQuickReviewMode() {
+  document.getElementById('quick-review-mode-toggle').checked = quickReviewMode;
+  document.getElementById('quick-review-bar').classList.toggle('open', quickReviewMode);
+  if (!quickReviewMode) document.getElementById('shortcut-help').classList.remove('open');
+  updateQuickReviewBar();
+  updateKeyboardFocusStyle();
 }
 
-function updatePowerReviewBar() {
+function updateQuickReviewBar() {
   const count = selectedSubscriptionKeys.size;
-  const label = document.getElementById('power-selection-count');
+  const label = document.getElementById('quick-review-selection-count');
   if (label) label.textContent = `${count} selected`;
-  for (const id of ['power-clear-selection', 'power-keep-selected', 'power-unsub-selected']) {
+  for (const id of ['quick-review-clear-selection', 'quick-review-keep-selected', 'quick-review-unsub-selected']) {
     const button = document.getElementById(id);
     if (button) button.disabled = count === 0;
   }
 }
 
 function setFocusedCard(subscriptionKey, scroll = true, takeFocus = false) {
-  if (!powerUserMode || !subscriptionKey) return;
+  if (!subscriptionKey) return;
   focusedSubscriptionKey = subscriptionKey;
   document.querySelectorAll('#cards-grid .card').forEach(card => {
-    card.classList.toggle('keyboard-focus', card.dataset.subscriptionKey === subscriptionKey);
+    const active = card.dataset.subscriptionKey === subscriptionKey;
+    card.tabIndex = active ? 0 : -1;
+    card.classList.toggle('review-target', active);
+    card.classList.toggle('keyboard-focus', active && document.activeElement === card);
   });
   const card = [...document.querySelectorAll('#cards-grid .card')]
     .find(candidate => candidate.dataset.subscriptionKey === subscriptionKey);
   if (card && scroll) card.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
   if (card && takeFocus) card.focus({ preventScroll: true });
+  updateKeyboardFocusStyle();
 }
 
 function moveCardFocus(direction) {
@@ -750,7 +769,7 @@ function moveCardFocus(direction) {
 }
 
 function toggleCardSelection(subscriptionKey) {
-  if (!powerUserMode || !subscriptionKey) return;
+  if (!quickReviewMode || !subscriptionKey) return;
   if (selectedSubscriptionKeys.has(subscriptionKey)) selectedSubscriptionKeys.delete(subscriptionKey);
   else selectedSubscriptionKeys.add(subscriptionKey);
   const card = [...document.querySelectorAll('#cards-grid .card')]
@@ -758,27 +777,31 @@ function toggleCardSelection(subscriptionKey) {
   if (card) {
     const selected = selectedSubscriptionKeys.has(subscriptionKey);
     card.classList.toggle('selected', selected);
+    card.setAttribute('aria-selected', selected ? 'true' : 'false');
     const button = card.querySelector('.js-card-select');
     if (button) {
       button.textContent = selected ? '✓' : '';
       button.setAttribute('aria-pressed', selected ? 'true' : 'false');
       button.setAttribute('aria-label', selected ? 'Remove from selection' : 'Add to selection');
-      button.title = selected ? 'Remove from selection (x)' : 'Add to selection (x)';
+      button.title = selected ? 'Remove from selection (Space)' : 'Add to selection (Space)';
     }
   }
-  updatePowerReviewBar();
+  updateQuickReviewBar();
 }
 
 function clearCardSelection() {
   selectedSubscriptionKeys.clear();
-  document.querySelectorAll('#cards-grid .card.selected').forEach(card => card.classList.remove('selected'));
+  document.querySelectorAll('#cards-grid .card.selected').forEach(card => {
+    card.classList.remove('selected');
+    card.setAttribute('aria-selected', 'false');
+  });
   document.querySelectorAll('.js-card-select').forEach(button => {
     button.textContent = '';
     button.setAttribute('aria-pressed', 'false');
     button.setAttribute('aria-label', 'Add to selection');
-    button.title = 'Add to selection (x)';
+    button.title = 'Add to selection (Space)';
   });
-  updatePowerReviewBar();
+  updateQuickReviewBar();
 }
 
 function allSourceFolders(sub) {
@@ -802,7 +825,7 @@ function enqueueQuickUnsubscribe(sub) {
     selectedMessages: selectedMessageCount(sub, selectedFolders)
   });
   selectedSubscriptionKeys.delete(subKey(sub));
-  updatePowerReviewBar();
+  updateQuickReviewBar();
 }
 
 function quickUnsubscribe(subscriptionKey) {
@@ -855,51 +878,315 @@ async function viewSelectedOrFocused() {
   if (failures) toast(`Failed to open ${failures} selected ${failures === 1 ? 'subscription' : 'subscriptions'}`, 'error');
 }
 
-function keyboardTargetIsEditable(target) {
-  return target instanceof HTMLElement && (
-    target.isContentEditable || ['INPUT', 'SELECT', 'TEXTAREA', 'BUTTON'].includes(target.tagName)
+function keyboardContext() {
+  if (document.querySelector('.modal-overlay.open')) return 'modal';
+  const active = document.activeElement;
+  if (active?.matches?.('#cards-grid .card *') && (
+    active.isContentEditable || ['INPUT', 'SELECT', 'TEXTAREA', 'BUTTON'].includes(active.tagName)
+  )) return 'cardControl';
+  if (active instanceof HTMLElement && (
+    active.isContentEditable || ['INPUT', 'SELECT', 'TEXTAREA'].includes(active.tagName)
+  )) return 'nativeInput';
+  if (active instanceof HTMLElement && active.tagName === 'BUTTON') return 'button';
+  if (document.querySelector('#cards-grid .card')) return 'review';
+  return 'dashboard';
+}
+
+function updateKeyboardFocusStyle() {
+  document.querySelectorAll('#cards-grid .card').forEach(card => {
+    card.classList.toggle('keyboard-focus', card === document.activeElement);
+  });
+}
+
+function updateKeyboardShortcutHint() {
+  document.getElementById('keyboard-shortcut-hint')
+    ?.classList.toggle('visible', document.hasFocus());
+}
+
+function setCardControlsEnabled(card, enabled) {
+  if (!card) return;
+  card.querySelectorAll('button').forEach(button => {
+    button.tabIndex = enabled ? 0 : -1;
+  });
+}
+
+function disableAllCardControls(exceptCard = null) {
+  document.querySelectorAll('#cards-grid .card').forEach(card => {
+    if (card !== exceptCard) setCardControlsEnabled(card, false);
+  });
+}
+
+const REVIEW_KEYMAP = new Map([
+  ['?', 'showHelp'],
+  ['q', 'toggleQuickReview'],
+  ['1', 'showPending'], ['2', 'showKept'],
+  ['3', 'showUnsubscribed'], ['4', 'showErrors'],
+  ['h', 'focusLeft'], ['ArrowLeft', 'focusLeft'],
+  ['j', 'focusDown'], ['ArrowDown', 'focusDown'],
+  ['k', 'focusUp'], ['ArrowUp', 'focusUp'],
+  ['l', 'focusRight'], ['ArrowRight', 'focusRight'],
+  ['g', 'focusFirst'], ['G', 'focusLast'],
+  ['u', 'unsubscribe'], ['i', 'keep'], ['v', 'view'],
+  ['c', 'cleanup'], ['r', 'reviewAgain'], ['x', 'remove'],
+  ['S', 'fullScan'],
+  ['Escape', 'hideHelp']
+]);
+
+const QUICK_REVIEW_KEYMAP = new Map([
+  [' ', 'toggleSelection'],
+  ['Escape', 'escape']
+]);
+
+const KEYMAPS_BY_CONTEXT = {
+  review: REVIEW_KEYMAP,
+  cardControl: new Map([
+    ['Enter', null], [' ', null], ['Escape', 'returnToCard']
+  ]),
+  button: new Map([
+    ['Enter', null], [' ', null], ['Escape', 'returnToCard']
+  ])
+};
+
+const EXCLUSIVE_KEYBOARD_CONTEXTS = new Set(['nativeInput']);
+
+const NON_REPEATING_QUICK_REVIEW_COMMANDS = new Set([
+  'toggleQuickReview', 'toggleSelection', 'unsubscribe', 'keep', 'view', 'cleanup', 'reviewAgain', 'remove', 'fullScan', 'showPending', 'showKept', 'showUnsubscribed', 'showErrors', 'showHelp', 'hideHelp', 'escape', 'returnToCard', 'confirmModal', 'closeModal'
+]);
+
+function updateContextShortcuts() {
+  const container = document.getElementById('context-shortcuts');
+  if (!container) return;
+  const actions = {
+    pending: [['u', 'unsubscribe'], ['i', 'keep'], ['v', 'view'], ['x', 'mark as spam']],
+    keep: [['v', 'view'], ['c', 'cleanup'], ['r', 'review again']],
+    unsubscribed: [['u', 'retry unsubscribe'], ['v', 'view'], ['c', 'cleanup'], ['r', 'review again'], ['x', 'dismiss']],
+    error: [['u', 'retry unsubscribe'], ['v', 'view'], ['c', 'cleanup'], ['r', 'review again'], ['x', 'dismiss']]
+  }[currentFilter] || [];
+  container.replaceChildren(...actions.flatMap(([key, label], index) => [
+    ...(index ? [document.createTextNode(' · ')] : []),
+    el('kbd', {}, key),
+    document.createTextNode(` ${label}`)
+  ]));
+}
+
+function modalKeyboardCommand(event) {
+  const active = document.activeElement;
+  const activeInsideModal = active?.closest?.('.modal-overlay.open');
+  const textControl = activeInsideModal && active?.matches?.(
+    'textarea, select, input:not([type="radio"]):not([type="checkbox"])'
   );
+  if (event.key === 'Escape') {
+    if (activeInsideModal && active instanceof HTMLElement && active.tagName === 'SELECT') return null;
+    return 'closeModal';
+  }
+  if (event.key === 'Enter') {
+    if (activeInsideModal && active instanceof HTMLElement && (
+      active.isContentEditable || active.matches('button, textarea, select, input:not([type="radio"]):not([type="checkbox"])')
+    )) return null;
+    return 'confirmModal';
+  }
+  if (textControl) return null;
+  if (activeInsideModal?.id !== 'unsub-modal-overlay' &&
+      !document.getElementById('unsub-modal-overlay').classList.contains('open')) return null;
+  if (['ArrowLeft', 'h'].includes(event.key)) return 'modalLeft';
+  if (['ArrowRight', 'l'].includes(event.key)) return 'modalRight';
+  if (['ArrowUp', 'k'].includes(event.key)) return 'modalUp';
+  if (['ArrowDown', 'j'].includes(event.key)) return 'modalDown';
+  return null;
 }
 
-function modalIsOpen() {
-  return !!document.querySelector('.modal-overlay.open');
+function moveDestinationTreeFocus(radio, direction) {
+  const node = radio.closest('.tree-node');
+  if (!node) return;
+  const subtree = node.nextElementSibling?.matches?.(`.tree-subtree[data-parent-id="${CSS.escape(radio.value)}"]`)
+    ? node.nextElementSibling
+    : null;
+  const toggle = node.querySelector('.tree-toggle');
+
+  if (direction === 'right') {
+    if (!subtree) return;
+    if (subtree.style.display === 'none') {
+      subtree.style.display = 'block';
+      if (toggle) toggle.textContent = '▾';
+      return;
+    }
+    const firstChild = [...subtree.querySelectorAll('input[name="dest-folder"]')]
+      .find(control => !control.disabled && control.dataset.moveDisabled !== '1' && control.getClientRects().length > 0);
+    if (firstChild) {
+      firstChild.focus();
+      firstChild.scrollIntoView({ block: 'nearest' });
+    }
+    return;
+  }
+
+  if (subtree && subtree.style.display !== 'none') {
+    subtree.style.display = 'none';
+    if (toggle) toggle.textContent = '▸';
+    return;
+  }
+
+  const parentSubtree = node.parentElement?.closest?.('.tree-subtree');
+  const parentId = parentSubtree?.dataset.parentId;
+  if (!parentId) return;
+  const parent = document.querySelector(`#modal-dest-tree input[name="dest-folder"][value="${CSS.escape(parentId)}"]`);
+  if (parent) {
+    parent.focus();
+    parent.scrollIntoView({ block: 'nearest' });
+  }
 }
 
-async function handlePowerUserShortcut(event) {
-  if (!powerUserMode || event.ctrlKey || event.metaKey || event.altKey || keyboardTargetIsEditable(event.target) || modalIsOpen()) return;
+function moveModalFocus(direction) {
+  const modal = document.querySelector('.modal-overlay.open .modal');
+  if (!modal) return;
+  const active = document.activeElement;
+  const selectRadio = (radios, current, offset) => {
+    if (!radios.length) return;
+    const index = current ? radios.indexOf(current) : -1;
+    const next = index < 0
+      ? (offset < 0 ? radios.length - 1 : 0)
+      : (index + offset + radios.length) % radios.length;
+    radios[next].checked = true;
+    radios[next].focus();
+    radios[next].scrollIntoView({ block: 'nearest' });
+    radios[next].dispatchEvent(new Event('change', { bubbles: true }));
+  };
+
+  if (direction === 'left' || direction === 'right') {
+    // Cleanup choices are laid out horizontally.
+    if (active?.matches?.('input[name="dest-folder"]')) {
+      moveDestinationTreeFocus(active, direction);
+      return;
+    }
+    const radios = [...modal.querySelectorAll('input[name="dispose"]')]
+      .filter(control => !control.disabled && control.getClientRects().length > 0);
+    selectRadio(radios, active?.matches?.('input[name="dispose"]') ? active : modal.querySelector('input[name="dispose"]:checked'), direction === 'left' ? -1 : 1);
+    return;
+  }
+
+  // Vertical movement traverses the controls revealed by the selected cleanup
+  // choice, followed by Create Folder (for Move) and the modal actions. Treat
+  // the horizontal cleanup radio group as one stop in that sequence.
+  const disposeAnchor = active?.matches?.('input[name="dispose"]')
+    ? active
+    : modal.querySelector('input[name="dispose"]:checked');
+  const controls = [...modal.querySelectorAll('button, input, select, textarea, [tabindex]')]
+    .filter(control => !control.disabled && control.tabIndex >= 0 && control.getClientRects().length > 0)
+    .filter(control => !control.closest('.modal-footer'))
+    .filter(control => !control.matches('input[name="dispose"]') || control === disposeAnchor)
+    .filter(control => !control.matches('input[name="dest-folder"][data-move-disabled="1"]'));
+  if (!controls.length) return;
+  const current = controls.indexOf(active?.matches?.('input[name="dispose"]') ? disposeAnchor : active);
+  const offset = direction === 'up' ? -1 : 1;
+  const next = current < 0
+    ? (offset < 0 ? controls.length - 1 : 0)
+    : (current + offset + controls.length) % controls.length;
+  controls[next].focus();
+  controls[next].scrollIntoView({ block: 'nearest' });
+}
+
+function closeActiveModal() {
+  if (document.getElementById('unsub-modal-overlay').classList.contains('open')) cancelOrCloseUnsubModal();
+  else if (document.getElementById('scope-modal-overlay').classList.contains('open')) closeScanScopeModal();
+  else if (document.getElementById('activity-modal-overlay').classList.contains('open')) closeActivityModal();
+}
+
+async function confirmActiveModal() {
+  if (document.getElementById('unsub-modal-overlay').classList.contains('open')) await doUnsubscribeConfirm();
+  else if (document.getElementById('scope-modal-overlay').classList.contains('open')) await saveScanScope();
+  else if (document.getElementById('activity-modal-overlay').classList.contains('open')) closeActivityModal();
+}
+
+async function runQuickReviewCommand(command) {
   const sub = findSubByKey(focusedSubscriptionKey);
-  if (event.key === '?') {
-    event.preventDefault();
+  if (command === 'showHelp') {
     document.getElementById('shortcut-help').classList.toggle('open');
-  } else if (event.key === 'h' || event.key === 'ArrowLeft') {
-    event.preventDefault(); moveCardFocus('left');
-  } else if (event.key === 'j' || event.key === 'ArrowDown') {
-    event.preventDefault(); moveCardFocus('down');
-  } else if (event.key === 'k' || event.key === 'ArrowUp') {
-    event.preventDefault(); moveCardFocus('up');
-  } else if (event.key === 'l' || event.key === 'ArrowRight') {
-    event.preventDefault(); moveCardFocus('right');
-  } else if (event.key === 'g') {
-    event.preventDefault(); setFocusedCard(visibleCardKeys()[0], true, true);
-  } else if (event.key === 'G') {
+  } else if (command === 'toggleQuickReview') {
+    await updateQuickReviewMode(!quickReviewMode);
+  } else if (command.startsWith('show')) {
+    const filters = {
+      showPending: 'pending',
+      showKept: 'keep',
+      showUnsubscribed: 'unsubscribed',
+      showErrors: 'error'
+    };
+    const filter = filters[command];
+    const button = document.querySelector(`.filter-tab[data-filter="${filter}"]`);
+    if (button) setFilter(filter, button);
+  } else if (command === 'focusLeft') moveCardFocus('left');
+  else if (command === 'focusDown') moveCardFocus('down');
+  else if (command === 'focusUp') moveCardFocus('up');
+  else if (command === 'focusRight') moveCardFocus('right');
+  else if (command === 'focusFirst') setFocusedCard(visibleCardKeys()[0], true, true);
+  else if (command === 'focusLast') {
     const keys = visibleCardKeys();
-    event.preventDefault(); setFocusedCard(keys[keys.length - 1], true, true);
-  } else if ((event.key === 'x' || event.key === ' ') && focusedSubscriptionKey) {
-    event.preventDefault(); toggleCardSelection(focusedSubscriptionKey);
-  } else if (event.key === 'u' && sub) {
-    event.preventDefault();
-    if (selectedSubscriptionKeys.size) quickUnsubscribeSelected();
-    else quickUnsubscribe(focusedSubscriptionKey);
-  } else if (event.key === 'i' && sub) {
-    event.preventDefault();
+    setFocusedCard(keys[keys.length - 1], true, true);
+  } else if (command === 'toggleSelection' && focusedSubscriptionKey) {
+    toggleCardSelection(focusedSubscriptionKey);
+  } else if (command === 'unsubscribe' && sub) {
+    if (sub.decision === 'pending') {
+      if (!quickReviewMode) openUnsubModal(focusedSubscriptionKey);
+      else if (selectedSubscriptionKeys.size) quickUnsubscribeSelected();
+      else quickUnsubscribe(focusedSubscriptionKey);
+    } else if (sub.decision === 'unsubscribed' || sub.decision === 'error') {
+      openUnsubModal(focusedSubscriptionKey, true);
+    }
+  } else if (command === 'keep' && sub && sub.decision === 'pending') {
     if (selectedSubscriptionKeys.size) await keepSelected();
     else await doKeep(focusedSubscriptionKey);
-  } else if (event.key === 'v' && sub) {
-    event.preventDefault();
+  } else if (command === 'view' && sub && subHasMessages(sub)) {
     await viewSelectedOrFocused();
-  } else if (event.key === 'Escape') {
+  } else if (command === 'cleanup' && sub && sub.decision !== 'pending' && subHasMessages(sub)) {
+    openCleanupModal(focusedSubscriptionKey);
+  } else if (command === 'reviewAgain' && sub && sub.decision !== 'pending') {
+    await doPending(focusedSubscriptionKey);
+  } else if (command === 'remove' && sub) {
+    if (sub.decision === 'pending' && subHasMessages(sub)) await doJunk(focusedSubscriptionKey);
+    else if (sub.decision === 'unsubscribed' || sub.decision === 'error') await doDismiss(focusedSubscriptionKey);
+  } else if (command === 'modalLeft') {
+    moveModalFocus('left');
+  } else if (command === 'modalRight') {
+    moveModalFocus('right');
+  } else if (command === 'modalUp') {
+    moveModalFocus('up');
+  } else if (command === 'modalDown') {
+    moveModalFocus('down');
+  }
+  else if (command === 'fullScan') {
+    if (!scanInProgress) await startScan();
+  }
+  else if (command === 'escape') {
     clearCardSelection();
     document.getElementById('shortcut-help').classList.remove('open');
+  } else if (command === 'hideHelp') {
+    document.getElementById('shortcut-help').classList.remove('open');
+  } else if (command === 'returnToCard') {
+    closeKeepMenus();
+    disableAllCardControls();
+    setFocusedCard(focusedSubscriptionKey, false, true);
+  } else if (command === 'closeModal') {
+    closeActiveModal();
+  } else if (command === 'confirmModal') {
+    await confirmActiveModal();
+  }
+}
+
+async function dispatchKeyboardCommand(event) {
+  if (event.defaultPrevented || event.ctrlKey || event.metaKey || event.altKey) return;
+  const context = keyboardContext();
+  if (EXCLUSIVE_KEYBOARD_CONTEXTS.has(context)) return;
+  const contextKeymap = KEYMAPS_BY_CONTEXT[context];
+  if (contextKeymap?.has(event.key) && contextKeymap.get(event.key) === null) return;
+  const command = context === 'modal' ? modalKeyboardCommand(event)
+    : contextKeymap?.get(event.key)
+      || (quickReviewMode ? QUICK_REVIEW_KEYMAP.get(event.key) : null)
+      || REVIEW_KEYMAP.get(event.key);
+  if (!command || (event.repeat && NON_REPEATING_QUICK_REVIEW_COMMANDS.has(command))) return;
+  event.preventDefault();
+  event.stopPropagation();
+  try {
+    await runQuickReviewCommand(command);
+  } catch (error) {
+    toast('Keyboard action failed: ' + (error.message || error), 'error');
   }
 }
 
@@ -996,7 +1283,7 @@ function getAvailableMethods(sub) {
   return methods;
 }
 
-function powerActionDescription(sub) {
+function quickReviewActionDescription(sub) {
   const method = getBestMethod(sub);
   if (!method) return { text: 'No unsubscribe destination was detected.', title: '' };
   if (method.type === 'mail') {
@@ -1114,16 +1401,17 @@ function buildCard(s) {
 
   const key = subKey(s);
   const selected = selectedSubscriptionKeys.has(key);
-  const focused = powerUserMode && focusedSubscriptionKey === key;
-  const powerDescription = powerUserMode ? powerActionDescription(s) : null;
-  return el('div', {
-    class: `card${s.processing ? ' processing' : ''}${selected ? ' selected' : ''}${focused ? ' keyboard-focus' : ''}`,
-    id: `card-${id}`, tabindex: powerUserMode ? '0' : null, ...attrs
+  const focused = focusedSubscriptionKey === key;
+  const quickReviewDescription = quickReviewMode ? quickReviewActionDescription(s) : null;
+  const card = el('div', {
+    class: `card${s.processing ? ' processing' : ''}${selected ? ' selected' : ''}${focused ? ' review-target' : ''}`,
+    id: `card-${id}`, role: 'gridcell', tabindex: focused ? '0' : '-1',
+    'aria-selected': selected ? 'true' : 'false', ...attrs
   },
     el('div', { class: 'card-body' },
-      powerUserMode && el('button', {
+      quickReviewMode && el('button', {
         class: 'card-select js-card-select',
-        title: selected ? 'Remove from selection (x)' : 'Add to selection (x)',
+        title: selected ? 'Remove from selection (Space)' : 'Add to selection (Space)',
         'aria-label': selected ? 'Remove from selection' : 'Add to selection',
         'aria-pressed': selected ? 'true' : 'false', ...attrs
       }, selected ? '✓' : ''),
@@ -1151,19 +1439,34 @@ function buildCard(s) {
       s.recipientAddress && el('div', { class: 'card-accounts', title: `Delivered to ${s.recipientAddress}` }, `→ ${s.recipientAddress}`),
       s.sampleSubject && el('div', { class: 'card-subject', title: s.sampleSubject }, `"${s.sampleSubject.substring(0, 80)}"`),
       s.error?.message && el('div', { class: 'card-error', title: s.error.message }, `${s.error.stage || 'Error'}: ${s.error.message}`),
-      powerDescription && (s.decision === 'pending' || s.decision === 'error') &&
-        el('div', { class: 'power-action-note', title: powerDescription.title }, powerDescription.text),
+      quickReviewDescription && (s.decision === 'pending' || s.decision === 'error') &&
+        el('div', { class: 'quick-review-action-note', title: quickReviewDescription.title }, quickReviewDescription.text),
       SHOW_DETECTION_UI && el('button', { class: 'evidence-toggle js-evidence-toggle', type: 'button' }, 'Why detected?')),
     SHOW_DETECTION_UI && el('div', { class: 'detection-evidence' }, buildDetectionEvidence(s)),
     el('div', { class: 'card-actions' }, buildActions(s)));
+  setCardControlsEnabled(card, false);
+  return card;
 }
 
 // ── Event delegation (attached once in DOMContentLoaded) ─────────────────────
 function attachCardListeners() {
-  document.getElementById('cards-grid').addEventListener('click', async (e) => {
+  const grid = document.getElementById('cards-grid');
+  grid.addEventListener('focusin', (e) => {
+    const card = e.target.closest?.('.card');
+    if (card) {
+      setFocusedCard(card.dataset.subscriptionKey, false, false);
+      disableAllCardControls(card);
+      setCardControlsEnabled(card, e.target !== card);
+    }
+    updateKeyboardFocusStyle();
+  });
+  grid.addEventListener('focusout', () => {
+    setTimeout(updateKeyboardFocusStyle, 0);
+  });
+  grid.addEventListener('click', async (e) => {
     const card = e.target.closest('.card');
-    if (powerUserMode && card) setFocusedCard(card.dataset.subscriptionKey, false, true);
     const btn = e.target.closest('button');
+    if (card && !btn) setFocusedCard(card.dataset.subscriptionKey, false, true);
     if (!btn) return;
 
     if (btn.classList.contains('js-card-select')) {
@@ -1222,7 +1525,7 @@ function attachCardListeners() {
     }
 
     if (btn.classList.contains('js-open-modal')) {
-      if (powerUserMode) quickUnsubscribe(btn.dataset.subscriptionKey);
+      if (quickReviewMode) quickUnsubscribe(btn.dataset.subscriptionKey);
       else openUnsubModal(btn.dataset.subscriptionKey);
       return;
     }
@@ -1940,7 +2243,8 @@ async function processActivityJob(job) {
     sub.decision = 'error';
     sub.processing = false;
     toast(message, 'error');
-    showErrorsView();
+    if (currentFilter === 'error') renderFilteredCards();
+    else removeCachedSubscription(sub);
     trace.log('unsubscribe:failed', undefined, { stage: 'unsubscribe' });
     job.status = 'failed';
     setActivityJobProgress(job, message, 100);
@@ -2172,12 +2476,6 @@ async function doPending(subscriptionKey) {
   }
 }
 
-function showErrorsView() {
-  const errorTab = document.querySelector('.filter-tab[data-filter="error"]');
-  if (errorTab) setFilter('error', errorTab);
-  else loadSubs('error');
-}
-
 // ── Filter ───────────────────────────────────────────────────────────────────
 function setFilter(filter, btn) {
   currentFilter = filter;
@@ -2186,6 +2484,7 @@ function setFilter(filter, btn) {
 
   const titles = { pending: 'Pending', keep: 'Kept', unsubscribed: 'Unsubscribed', error: 'Errors' };
   document.getElementById('main-title').textContent = titles[filter] || filter;
+  updateContextShortcuts();
   loadSubs(filter);
 }
 
@@ -2467,7 +2766,15 @@ function pollScanStatus() {
 // ── Init ─────────────────────────────────────────────────────────────────────
 document.addEventListener('DOMContentLoaded', async () => {
   window.addEventListener('resize', positionToastContainer);
-  document.addEventListener('keydown', handlePowerUserShortcut);
+  window.addEventListener('focus', updateKeyboardShortcutHint);
+  window.addEventListener('blur', updateKeyboardShortcutHint);
+  updateKeyboardShortcutHint();
+  updateContextShortcuts();
+  document.addEventListener('keydown', dispatchKeyboardCommand);
+  document.addEventListener('focusin', (e) => {
+    if (!e.target.closest?.('#cards-grid .card')) disableAllCardControls();
+    updateKeyboardFocusStyle();
+  });
   document.addEventListener('click', (e) => {
     if (!e.target.closest('.keep-split')) closeKeepMenus();
   });
@@ -2503,12 +2810,12 @@ document.addEventListener('DOMContentLoaded', async () => {
   document.getElementById('default-unsub-dispose-select').addEventListener('change', (e) => {
     updateDefaultUnsubscribeDispose(e.target.value);
   });
-  document.getElementById('power-user-mode-toggle').addEventListener('change', (e) => {
-    updatePowerUserMode(e.target.checked);
+  document.getElementById('quick-review-mode-toggle').addEventListener('change', (e) => {
+    updateQuickReviewMode(e.target.checked);
   });
-  document.getElementById('power-clear-selection').addEventListener('click', clearCardSelection);
-  document.getElementById('power-keep-selected').addEventListener('click', keepSelected);
-  document.getElementById('power-unsub-selected').addEventListener('click', quickUnsubscribeSelected);
+  document.getElementById('quick-review-clear-selection').addEventListener('click', clearCardSelection);
+  document.getElementById('quick-review-keep-selected').addEventListener('click', keepSelected);
+  document.getElementById('quick-review-unsub-selected').addEventListener('click', quickUnsubscribeSelected);
   document.getElementById('full-reset-btn').addEventListener('click', doFullReset);
   document.getElementById('activity-list').addEventListener('click', (e) => {
     const dismissBtn = e.target.closest('.js-dismiss-activity');
@@ -2589,7 +2896,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   await loadDryRun();
   await loadAutoSendUnsubscribeEmails();
   await loadDefaultUnsubscribeDispose();
-  await loadPowerUserMode();
+  await loadQuickReviewMode();
   await loadStats();
   await loadSubs('pending');
 

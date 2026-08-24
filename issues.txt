@@ -14,7 +14,7 @@ ThunderSub issues from user feedback
 3. Large review queues require too many clicks
    Confirming cleanup options for every subscription makes hundreds of results
    impractical to process. Explore a power-user review mode with keyboard
-   shortcuts, multi-select, and one-action unsubscribe using saved defaults.
+   shortcuts, multi-select, and instant unsubscribe using saved defaults.
 
 4. Some jobs hang indefinitely
    Unsubscribe or cleanup jobs can remain active until Thunderbird is restarted.

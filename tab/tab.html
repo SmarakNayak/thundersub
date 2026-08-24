@@ -90,10 +90,10 @@
     </label>
     <label class="settings-toggle">
       <span>
-        <strong>Power-user review mode</strong>
-        <small>Vim shortcuts, multi-select, and one-action unsubscribe using the saved cleanup default</small>
+        <strong>Quick Review mode</strong>
+        <small>Multi-select and instant unsubscribe using the saved cleanup default</small>
       </span>
-      <input type="checkbox" id="power-user-mode-toggle">
+      <input type="checkbox" id="quick-review-mode-toggle">
     </label>
     <button id="full-reset-btn">Full Reset</button>
   </div>
@@ -118,20 +118,20 @@
       </label>
     </div>
   </div>
-  <div id="power-review-bar">
-    <span><strong id="power-selection-count">0 selected</strong></span>
-    <div class="power-review-actions">
-      <button id="power-clear-selection" class="btn btn-muted">Clear</button>
-      <button id="power-keep-selected" class="btn btn-keep">Keep selected</button>
-      <button id="power-unsub-selected" class="btn btn-unsub">Unsubscribe selected</button>
+  <div id="quick-review-bar">
+    <span><strong id="quick-review-selection-count">0 selected</strong></span>
+    <div class="quick-review-actions">
+      <button id="quick-review-clear-selection" class="btn btn-muted">Clear</button>
+      <button id="quick-review-keep-selected" class="btn btn-keep">Keep selected</button>
+      <button id="quick-review-unsub-selected" class="btn btn-unsub">Unsubscribe selected</button>
     </div>
-    <span class="power-shortcuts"><kbd>h</kbd><kbd>j</kbd><kbd>k</kbd><kbd>l</kbd> move · <kbd>Space</kbd> select · <kbd>u</kbd> unsubscribe · <kbd>i</kbd> keep · <kbd>v</kbd> view · <kbd>?</kbd> help</span>
   </div>
   <div id="shortcut-help" role="status">
-    <strong>Vim review shortcuts</strong>
-    <span><kbd>h</kbd><kbd>j</kbd><kbd>k</kbd><kbd>l</kbd> or arrow keys move · <kbd>g</kbd>/<kbd>G</kbd> first/last · <kbd>Space</kbd> or <kbd>x</kbd> toggle selection · <kbd>u</kbd> unsubscribe · <kbd>i</kbd> keep · <kbd>v</kbd> view · <kbd>Esc</kbd> clear</span>
+    <strong>Keyboard shortcuts</strong>
+    <span id="context-shortcuts"></span>
+    <span><kbd>←</kbd><kbd>↓</kbd><kbd>↑</kbd><kbd>→</kbd> or <kbd>h</kbd><kbd>j</kbd><kbd>k</kbd><kbd>l</kbd> move · <kbd>g</kbd>/<kbd>G</kbd> first/last · <kbd>S</kbd> full scan · <kbd>q</kbd> toggle Quick Review · <kbd>Space</kbd> select · <kbd>Enter</kbd> submit · <kbd>Esc</kbd> cancel · <kbd>1</kbd>/<kbd>2</kbd>/<kbd>3</kbd>/<kbd>4</kbd> Pending/Kept/Unsubscribed/Errors</span>
   </div>
-  <div id="cards-grid">
+  <div id="cards-grid" role="grid" aria-label="Subscriptions">
     <div id="loading"><div class="spinner"></div>Loading...</div>
   </div>
   <div id="empty-state">
@@ -139,6 +139,7 @@
     <h3>No subscriptions found</h3>
     <p>Run a scan to discover email subscriptions.</p>
   </div>
+  <div id="keyboard-shortcut-hint">Press <kbd>?</kbd> for shortcuts</div>
 </div>
 
 <div id="unsub-modal-overlay" class="modal-overlay">
