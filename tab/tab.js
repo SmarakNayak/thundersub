@@ -980,10 +980,33 @@ function updateQuickReviewBar() {
   const count = selectedSubscriptionKeys.size;
   const label = document.getElementById('quick-review-selection-count');
   if (label) label.textContent = `${count} selected`;
-  for (const id of ['quick-review-clear-selection', 'quick-review-keep-selected', 'quick-review-unsub-selected']) {
+  const actionsByFilter = {
+    pending: ['view', 'keep', 'unsub', 'remove'],
+    keep: ['view', 'cleanup', 'review'],
+    unsubscribed: ['view', 'cleanup', 'review', 'unsub', 'remove'],
+    error: ['view', 'cleanup', 'review', 'unsub', 'remove']
+  };
+  const actionButtons = {
+    view: 'quick-review-view-selected',
+    cleanup: 'quick-review-cleanup-selected',
+    review: 'quick-review-review-selected',
+    keep: 'quick-review-keep-selected',
+    unsub: 'quick-review-unsub-selected',
+    remove: 'quick-review-remove-selected'
+  };
+  const visibleActions = new Set(actionsByFilter[currentFilter] || []);
+  for (const [action, id] of Object.entries(actionButtons)) {
     const button = document.getElementById(id);
-    if (button) button.disabled = count === 0;
+    if (!button) continue;
+    button.hidden = !visibleActions.has(action);
+    button.disabled = count === 0;
   }
+  const clearButton = document.getElementById('quick-review-clear-selection');
+  if (clearButton) clearButton.disabled = count === 0;
+  const unsubscribeButton = document.getElementById('quick-review-unsub-selected');
+  if (unsubscribeButton) unsubscribeButton.textContent = currentFilter === 'pending' ? 'Unsubscribe selected' : 'Retry selected';
+  const removeButton = document.getElementById('quick-review-remove-selected');
+  if (removeButton) removeButton.textContent = currentFilter === 'pending' ? 'Mark as spam' : 'Dismiss selected';
 }
 
 function setFocusedCard(subscriptionKey, scroll = true, takeFocus = false) {
@@ -3298,8 +3321,12 @@ document.addEventListener('DOMContentLoaded', async () => {
     updateQuickReviewMode(e.target.checked);
   });
   document.getElementById('quick-review-clear-selection').addEventListener('click', clearCardSelection);
+  document.getElementById('quick-review-view-selected').addEventListener('click', viewSelectedOrFocused);
+  document.getElementById('quick-review-cleanup-selected').addEventListener('click', cleanupSelectedWithDefault);
+  document.getElementById('quick-review-review-selected').addEventListener('click', reviewSelectedOrFocused);
   document.getElementById('quick-review-keep-selected').addEventListener('click', keepSelectedOrFocused);
   document.getElementById('quick-review-unsub-selected').addEventListener('click', quickUnsubscribeSelected);
+  document.getElementById('quick-review-remove-selected').addEventListener('click', removeSelectedOrFocused);
   document.getElementById('full-reset-btn').addEventListener('click', doFullReset);
   document.getElementById('activity-list').addEventListener('click', (e) => {
     const dismissBtn = e.target.closest('.js-dismiss-activity');

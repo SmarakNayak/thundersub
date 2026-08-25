@@ -165,6 +165,7 @@ body{display:flex;overflow:hidden}
 #quick-review-bar{display:none;align-items:center;gap:12px;flex-wrap:wrap;margin:-8px 0 18px;padding:10px 12px;border:1px solid rgba(99,102,241,.4);border-radius:9px;background:rgba(99,102,241,.08)}
 #quick-review-bar.open{display:flex}
 .quick-review-actions{display:flex;gap:6px;flex-wrap:wrap}
+.quick-review-actions button[hidden]{display:none}
 kbd{padding:1px 5px;border:1px solid var(--border);border-bottom-width:2px;border-radius:4px;background:var(--card);color:var(--text);font:11px monospace}
 #shortcut-help{display:none;margin:-8px 0 18px;padding:10px 12px;border:1px solid var(--border);border-radius:8px;color:var(--muted);font-size:12px;line-height:1.6}
 #shortcut-help.open{display:flex;flex-direction:column;gap:4px}
