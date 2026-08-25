@@ -11,6 +11,10 @@ let dryRun = false;
 let autoSendUnsubscribeEmails = false;
 let defaultUnsubscribeDispose = 'keep';
 let moveDestinationsByIdentity = {};
+let moveDestinationDraft = {};
+let expandedMoveDestinationIdentity = '';
+let moveDestinationCreateIdentity = '';
+let pendingQuickMoveKeys = [];
 let quickReviewMode = false;
 let focusedSubscriptionKey = null;
 const selectedSubscriptionKeys = new Set();
@@ -264,6 +268,20 @@ function dismissActivityJob(jobId) {
   renderActivityQueue();
 }
 
+function clearFinishedActivity() {
+  const cleared = recentActivityJobs.length;
+  if (!cleared) {
+    toast('No finished activity to clear', 'info');
+    return;
+  }
+  if (activityModalJobId != null && recentActivityJobs.some(job => job.id === activityModalJobId)) {
+    closeActivityModal();
+  }
+  recentActivityJobs = [];
+  renderActivityQueue();
+  toast(`Cleared ${cleared} activity ${cleared === 1 ? 'item' : 'items'}`, 'success');
+}
+
 function clearActivityQueue() {
   activityQueue = [];
   activeActivityJob = null;
@@ -488,7 +506,7 @@ function renderMoveDestinationsButton() {
   if (!button) return;
   const visible = defaultUnsubscribeDispose === 'move';
   button.classList.toggle('visible', visible);
-  if (!visible) closeMoveDestinationsPopover();
+  if (!visible) closeMoveDestinationsModal();
 }
 
 function moveDestinationFolderDisabled(folder) {
@@ -500,6 +518,7 @@ function moveDestinationFolderDisabled(folder) {
 }
 
 function flattenMoveFolders(account, folders, depth = 0) {
+  if (!account) return [];
   const result = [];
   for (const folder of (folders || [])) {
     if (!moveDestinationFolderDisabled(folder)) {
@@ -510,8 +529,7 @@ function flattenMoveFolders(account, folders, depth = 0) {
         accountName: account.accountName,
         folderName: folder.name,
         folderPath,
-        label: `${account.accountName} | ${folderPath}`,
-        optionLabel: `${'  '.repeat(depth)}${folder.name}`
+        label: `${account.accountName} | ${folderPath}`
       });
     }
     result.push(...flattenMoveFolders(account, folder.subFolders, depth + 1));
@@ -519,81 +537,166 @@ function flattenMoveFolders(account, folders, depth = 0) {
   return result;
 }
 
-async function saveMoveDestinations() {
-  const result = await bg('setMoveDestinationsByIdentity', { moveDestinationsByIdentity });
-  moveDestinationsByIdentity = result.moveDestinationsByIdentity || {};
-  renderFilteredCards();
+function moveDestinationIdentityRows() {
+  const rows = [];
+  const seen = new Set();
+  for (const account of (folderTreeCache || [])) {
+    for (const identity of (account.identities || [])) {
+      const address = identityAddress(identity.email);
+      if (!address || seen.has(address)) continue;
+      seen.add(address);
+      rows.push({ address, account });
+    }
+  }
+  return rows;
 }
 
-function positionMoveDestinationsPopover() {
-  const button = document.getElementById('move-destinations-btn');
-  const popover = document.getElementById('move-destinations-popover');
-  if (!button || !popover) return;
-  const rect = button.getBoundingClientRect();
-  const width = Math.min(360, window.innerWidth - 24);
-  popover.style.width = `${width}px`;
-  popover.style.left = `${Math.min(rect.right + 8, window.innerWidth - width - 12)}px`;
-  popover.style.top = `${Math.max(12, Math.min(rect.top, window.innerHeight - Math.min(520, popover.scrollHeight || 520) - 12))}px`;
+function renderMoveDestinationSettings(focusAddress = '') {
+  const rows = moveDestinationIdentityRows();
+  const elements = rows.map(({ address, account }) => {
+    const expanded = expandedMoveDestinationIdentity === address;
+    const destination = moveDestinationDraft[address];
+    const header = el('button', {
+      class: 'move-destination-summary', type: 'button',
+      'data-identity-address': address, 'aria-expanded': expanded ? 'true' : 'false'
+    },
+      el('span', { class: 'move-destination-identity' },
+        el('strong', { title: address }, address),
+        el('span', { class: 'move-destination-account', title: account.accountName }, account.accountName)),
+      el('span', { class: 'move-destination-current', title: destination?.label || 'Ask each time' },
+        destination ? (destination.folderPath || destination.folderName) : 'Ask each time'),
+      el('span', { class: 'move-destination-chevron', 'aria-hidden': 'true' }, expanded ? '▴' : '▾'));
+
+    let picker = null;
+    if (expanded) {
+      const selectedId = destination?.accountId === account.accountId ? destination.id : '';
+      picker = el('div', { class: 'move-destination-picker' },
+        el('h4', {}, 'Destination folder'),
+        el('label', { class: 'tree-folder-label move-destination-ask' },
+          el('span', { class: 'tree-spacer' }),
+          el('input', { type: 'radio', name: 'settings-dest-folder', value: '', checked: !selectedId }),
+          el('span', { class: 'tree-folder-name' }, 'Ask each time')),
+        el('div', { class: 'folder-tree move-destination-tree' },
+          el('div', { class: 'tree-account', 'data-root-folder-id': account.rootFolderId || '' },
+            el('div', { class: 'tree-account-name' }, account.accountName),
+            renderFolderNodes(account.folders, 0, 'settings-dest-folder', selectedId))),
+        el('button', {
+          class: 'btn btn-sm btn-outline move-destination-new-folder', type: 'button',
+          'data-identity-address': address
+        }, '+ New Folder'));
+    }
+    return el('div', { class: `move-destination-row${expanded ? ' expanded' : ''}` }, header, picker);
+  });
+  document.getElementById('move-destinations-list').replaceChildren(
+    ...(elements.length ? elements : [el('div', { class: 'move-destinations-empty' }, 'No email identities found.')]))
+  const selectedId = moveDestinationDraft[expandedMoveDestinationIdentity]?.id;
+  const selectedRadio = selectedId && document.querySelector(
+    `#move-destinations-list input[name="settings-dest-folder"][value="${CSS.escape(selectedId)}"]`);
+  let parentSubtree = selectedRadio?.closest('.tree-subtree');
+  while (parentSubtree) {
+    parentSubtree.style.display = 'block';
+    const parentId = parentSubtree.dataset.parentId;
+    const parentRadio = document.querySelector(
+      `#move-destinations-list input[name="settings-dest-folder"][value="${CSS.escape(parentId)}"]`);
+    const toggle = parentRadio?.closest('.tree-node')?.querySelector('.tree-toggle');
+    if (toggle) toggle.textContent = '▾';
+    parentSubtree = parentRadio?.closest('.tree-subtree');
+  }
+  if (focusAddress) {
+    const summary = document.querySelector(
+      `.move-destination-summary[data-identity-address="${CSS.escape(identityAddress(focusAddress))}"]`);
+    summary?.focus();
+    summary?.scrollIntoView({ block: 'nearest' });
+  }
 }
 
-async function openMoveDestinationsPopover(focusAddress = '') {
-  const popover = document.getElementById('move-destinations-popover');
-  const button = document.getElementById('move-destinations-btn');
-  popover.classList.add('open');
-  button.setAttribute('aria-expanded', 'true');
+async function openMoveDestinationsModal(focusAddress = '') {
+  const address = identityAddress(focusAddress);
+  document.getElementById('move-destinations-modal-overlay').classList.add('open');
+  document.getElementById('move-destinations-btn').setAttribute('aria-expanded', 'true');
+  moveDestinationDraft = JSON.parse(JSON.stringify(moveDestinationsByIdentity));
+  expandedMoveDestinationIdentity = address;
+  closeMoveDestinationCreateForm();
   document.getElementById('move-destinations-list').replaceChildren(
     el('div', { class: 'move-destinations-empty' }, 'Loading identities and folders...'));
-  positionMoveDestinationsPopover();
   try {
     if (!folderTreeCache) folderTreeCache = await bg('getFolderTree');
-    const rows = [];
-    const seen = new Set();
-    for (const account of (folderTreeCache || [])) {
-      const folders = flattenMoveFolders(account, account.folders);
-      for (const identity of (account.identities || [])) {
-        const address = identityAddress(identity.email);
-        if (!address || seen.has(address)) continue;
-        seen.add(address);
-        const select = el('select', { 'data-identity-address': address, 'aria-label': `Move folder for ${address}` },
-          el('option', { value: '' }, 'Ask each time'),
-          folders.map(folder => el('option', { value: folder.id }, folder.optionLabel)));
-        const saved = moveDestinationsByIdentity[address];
-        select.value = saved && folders.some(folder => folder.id === saved.id) ? saved.id : '';
-        select.addEventListener('change', async () => {
-          const destination = folders.find(folder => folder.id === select.value);
-          if (destination) moveDestinationsByIdentity[address] = destination;
-          else delete moveDestinationsByIdentity[address];
-          try {
-            await saveMoveDestinations();
-          } catch (e) {
-            toast('Failed to save move destination: ' + (e.message || e), 'error');
-          }
-        });
-        rows.push(el('label', { class: 'move-destination-row' },
-          el('span', { class: 'move-destination-identity' },
-            el('strong', { title: address }, address),
-            el('span', { class: 'move-destination-account', title: account.accountName }, account.accountName)),
-          select));
-      }
-    }
-    document.getElementById('move-destinations-list').replaceChildren(
-      ...(rows.length ? rows : [el('div', { class: 'move-destinations-empty' }, 'No email identities found.')]))
-    positionMoveDestinationsPopover();
-    const focusSelect = focusAddress && document.querySelector(
-      `#move-destinations-list select[data-identity-address="${CSS.escape(identityAddress(focusAddress))}"]`);
-    if (focusSelect) {
-      focusSelect.focus();
-      focusSelect.scrollIntoView({ block: 'nearest' });
-    }
+    renderMoveDestinationSettings(address);
   } catch (e) {
     document.getElementById('move-destinations-list').replaceChildren(
       el('div', { class: 'move-destinations-empty' }, 'Failed to load identities and folders.'));
   }
 }
 
-function closeMoveDestinationsPopover() {
-  document.getElementById('move-destinations-popover')?.classList.remove('open');
+function closeMoveDestinationsModal() {
+  document.getElementById('move-destinations-modal-overlay')?.classList.remove('open');
   document.getElementById('move-destinations-btn')?.setAttribute('aria-expanded', 'false');
+  moveDestinationDraft = {};
+  expandedMoveDestinationIdentity = '';
+  pendingQuickMoveKeys = [];
+  closeMoveDestinationCreateForm();
+}
+
+async function saveMoveDestinationsModal() {
+  const quickMoveKeys = [...pendingQuickMoveKeys];
+  try {
+    const result = await bg('setMoveDestinationsByIdentity', {
+      moveDestinationsByIdentity: moveDestinationDraft
+    });
+    moveDestinationsByIdentity = result.moveDestinationsByIdentity || {};
+    renderFilteredCards();
+    closeMoveDestinationsModal();
+    if (quickMoveKeys.length) await resumeQuickMoveAfterSettings(quickMoveKeys);
+    else toast('Move destinations saved', 'success');
+  } catch (e) {
+    toast('Failed to save move destinations: ' + (e.message || e), 'error');
+  }
+}
+
+function closeMoveDestinationCreateForm() {
+  moveDestinationCreateIdentity = '';
+  document.getElementById('move-destination-create-form')?.classList.remove('open');
+  const input = document.getElementById('move-destination-folder-name');
+  if (input) input.value = '';
+}
+
+function openMoveDestinationCreateForm(address) {
+  moveDestinationCreateIdentity = identityAddress(address);
+  const saved = moveDestinationDraft[moveDestinationCreateIdentity];
+  document.getElementById('move-destination-create-label').textContent = saved
+    ? `Create inside ${saved.folderPath || saved.folderName} for ${moveDestinationCreateIdentity}`
+    : `Create at the account root for ${moveDestinationCreateIdentity}`;
+  document.getElementById('move-destination-create-form').classList.add('open');
+  document.getElementById('move-destination-folder-name').focus();
+}
+
+async function createMoveDestinationFolder() {
+  const address = moveDestinationCreateIdentity;
+  const name = document.getElementById('move-destination-folder-name').value.trim();
+  if (!address || !name || !folderTreeCache) return;
+  const account = folderTreeCache.find(candidate =>
+    (candidate.identities || []).some(identity => identityAddress(identity.email) === address));
+  if (!account) return;
+  const saved = moveDestinationDraft[address];
+  const parentFolderId = saved?.accountId === account.accountId ? saved.id : account.rootFolderId;
+  if (!parentFolderId) {
+    toast('No parent folder is available for this identity', 'error');
+    return;
+  }
+  try {
+    const created = await bg('createFolder', { parentFolderId, folderName: name });
+    folderTreeCache = await bg('getFolderTree');
+    const refreshedAccount = folderTreeCache.find(candidate => candidate.accountId === account.accountId);
+    const destination = flattenMoveFolders(refreshedAccount, refreshedAccount?.folders)
+      .find(folder => folder.id === created.id);
+    if (destination) moveDestinationDraft[address] = destination;
+    expandedMoveDestinationIdentity = address;
+    closeMoveDestinationCreateForm();
+    renderMoveDestinationSettings(address);
+    toast(`Created ${name}`, 'success');
+  } catch (e) {
+    toast('Failed to create folder: ' + (e.message || e), 'error');
+  }
 }
 
 async function loadQuickReviewMode() {
@@ -969,6 +1072,23 @@ async function configuredMoveDestination(sub) {
   return flattenMoveFolders(account, account.folders).find(folder => folder.id === saved.id) || null;
 }
 
+async function resumeQuickMoveAfterSettings(keys) {
+  const subs = keys.map(findSubByKey).filter(sub => sub && !sub.processing);
+  if (!subs.length) return;
+  const destinations = await Promise.all(subs.map(configuredMoveDestination));
+  const missingIndex = destinations.findIndex(destination => !destination);
+  if (missingIndex >= 0) {
+    const missing = subs[missingIndex];
+    pendingQuickMoveKeys = keys;
+    toast(`Choose a move destination for ${missing.accountIdentityAddress || 'every identity'}`, 'info');
+    await openMoveDestinationsModal(missing.accountIdentityAddress);
+    return;
+  }
+  subs.forEach((sub, index) => enqueueQuickUnsubscribe(sub, destinations[index]));
+  toast(`Queued ${subs.length} unsubscribe ${subs.length === 1 ? 'action' : 'actions'}`, 'success');
+  renderFilteredCards();
+}
+
 async function quickUnsubscribe(subscriptionKey) {
   const sub = findSubByKey(subscriptionKey);
   if (!sub || sub.processing) return;
@@ -976,7 +1096,8 @@ async function quickUnsubscribe(subscriptionKey) {
     const destination = await configuredMoveDestination(sub);
     if (!destination) {
       toast(`Choose a move destination for ${sub.accountIdentityAddress || 'this identity'}`, 'info');
-      openUnsubModal(subscriptionKey);
+      pendingQuickMoveKeys = [subscriptionKey];
+      await openMoveDestinationsModal(sub.accountIdentityAddress);
       return;
     }
     enqueueQuickUnsubscribe(sub, destination);
@@ -996,7 +1117,8 @@ async function quickUnsubscribeSelected() {
     if (missingIndex >= 0) {
       const missing = subs[missingIndex];
       toast(`Batch unsubscribe needs a move destination for ${missing.accountIdentityAddress || 'every identity'}`, 'info');
-      await openMoveDestinationsPopover(missing.accountIdentityAddress);
+      pendingQuickMoveKeys = subs.map(subKey);
+      await openMoveDestinationsModal(missing.accountIdentityAddress);
       return;
     }
     subs.forEach((sub, index) => enqueueQuickUnsubscribe(sub, destinations[index]));
@@ -1011,6 +1133,63 @@ async function keepSelected() {
   const keys = [...selectedSubscriptionKeys];
   clearCardSelection();
   for (const key of keys) await doKeep(key);
+}
+
+async function reviewSelectedOrFocused() {
+  const keys = selectedSubscriptionKeys.size
+    ? [...selectedSubscriptionKeys]
+    : focusedSubscriptionKey ? [focusedSubscriptionKey] : [];
+  if (!keys.length) return;
+  const batch = keys.length > 1;
+  if (selectedSubscriptionKeys.size) clearCardSelection();
+  let moved = 0;
+  for (const key of keys) {
+    if (await doPending(key, batch)) moved++;
+  }
+  if (batch && moved) toast(`Moved ${moved} subscriptions back to pending`, 'success');
+  if (batch && moved < keys.length) toast(`Failed to move ${keys.length - moved} subscriptions`, 'error');
+}
+
+async function removeSelectedOrFocused() {
+  if (!selectedSubscriptionKeys.size) {
+    const sub = findSubByKey(focusedSubscriptionKey);
+    if (!sub) return;
+    if (sub.decision === 'pending' && subHasMessages(sub)) await doJunk(focusedSubscriptionKey);
+    else if (sub.decision === 'unsubscribed' || sub.decision === 'error') await doDismiss(focusedSubscriptionKey);
+    return;
+  }
+
+  const subs = [...selectedSubscriptionKeys].map(findSubByKey).filter(Boolean);
+  if (!subs.length) return;
+  if (subs.every(sub => sub.decision === 'pending')) {
+    const eligible = subs.filter(subHasMessages);
+    const emailCount = eligible.reduce((sum, sub) =>
+      sum + (sub.messageGroups || []).reduce((groupSum, group) => groupSum + groupMessageCount(group), 0), 0);
+    if (!eligible.length || !confirm(`Mark ${emailCount} emails from ${eligible.length} subscriptions as junk and move them to spam? The senders will not be contacted.`)) return;
+    clearCardSelection();
+    let succeeded = 0;
+    let junked = 0;
+    let dryRunBatch = false;
+    for (const sub of eligible) {
+      const result = await doJunk(subKey(sub), { confirmAction: false, silent: true });
+      if (result.ok) succeeded++;
+      junked += result.junked;
+      dryRunBatch ||= result.dryRun;
+    }
+    if (dryRunBatch) toast(`Dry run: would mark ${junked} emails from ${succeeded} subscriptions as junk.`, 'info');
+    else if (succeeded) toast(`Marked ${junked} emails from ${succeeded} subscriptions as junk`, 'success');
+    if (succeeded < eligible.length) toast(`Failed to mark ${eligible.length - succeeded} subscriptions as junk`, 'error');
+    return;
+  }
+
+  const dismissable = subs.filter(sub => sub.decision === 'unsubscribed' || sub.decision === 'error');
+  clearCardSelection();
+  let dismissed = 0;
+  for (const sub of dismissable) {
+    if (await doDismiss(subKey(sub), true)) dismissed++;
+  }
+  if (dismissed) toast(`Dismissed ${dismissed} subscriptions`, 'success');
+  if (dismissed < dismissable.length) toast(`Failed to dismiss ${dismissable.length - dismissed} subscriptions`, 'error');
 }
 
 async function viewSelectedOrFocused() {
@@ -1030,6 +1209,44 @@ async function viewSelectedOrFocused() {
   const opened = subs.length - failures;
   if (opened > 1) toast(`Opened ${opened} subscriptions in separate tabs`, 'success');
   if (failures) toast(`Failed to open ${failures} selected ${failures === 1 ? 'subscription' : 'subscriptions'}`, 'error');
+}
+
+async function cleanupSelectedWithDefault() {
+  const subs = [...selectedSubscriptionKeys]
+    .map(findSubByKey)
+    .filter(sub => sub && sub.decision !== 'pending' && subHasMessages(sub) && !sub.processing);
+  if (!subs.length) return;
+
+  const dispose = defaultUnsubscribeDispose;
+  const jobs = [];
+  const missingDestinations = [];
+  for (const sub of subs) {
+    const selectedFolders = (dispose === 'delete' || dispose === 'move') ? allSourceFolders(sub) : [];
+    const destination = dispose === 'move' ? await configuredMoveDestination(sub) : null;
+    if (dispose === 'move' && !destination) {
+      missingDestinations.push(identityAddress(sub.accountIdentityAddress) || sub.recipientAddress || 'unknown identity');
+      continue;
+    }
+    jobs.push({ sub, selectedFolders, destination });
+  }
+
+  if (missingDestinations.length) {
+    toast(`Configure a move destination for: ${[...new Set(missingDestinations)].join(', ')}`, 'info');
+    return;
+  }
+
+  clearCardSelection();
+  for (const { sub, selectedFolders, destination } of jobs) {
+    enqueueActivityJob({
+      ...subRequest(sub),
+      mode: 'cleanup',
+      method: null,
+      dispose,
+      selectedFolders,
+      destination,
+      selectedMessages: selectedMessageCount(sub, selectedFolders)
+    });
+  }
 }
 
 function keyboardContext() {
@@ -1082,13 +1299,12 @@ const REVIEW_KEYMAP = new Map([
   ['g', 'focusFirst'], ['G', 'focusLast'],
   ['u', 'unsubscribe'], ['i', 'keep'], ['v', 'view'],
   ['c', 'cleanup'], ['r', 'reviewAgain'], ['x', 'remove'],
-  ['S', 'fullScan'],
-  ['Escape', 'hideHelp']
+  ['S', 'fullScan'], ['C', 'clearActivity'],
+  ['Escape', 'escape']
 ]);
 
 const QUICK_REVIEW_KEYMAP = new Map([
-  [' ', 'toggleSelection'],
-  ['Escape', 'escape']
+  [' ', 'toggleSelection']
 ]);
 
 const KEYMAPS_BY_CONTEXT = {
@@ -1104,7 +1320,7 @@ const KEYMAPS_BY_CONTEXT = {
 const EXCLUSIVE_KEYBOARD_CONTEXTS = new Set(['nativeInput']);
 
 const NON_REPEATING_QUICK_REVIEW_COMMANDS = new Set([
-  'toggleQuickReview', 'toggleSelection', 'unsubscribe', 'keep', 'view', 'cleanup', 'reviewAgain', 'remove', 'fullScan', 'showPending', 'showKept', 'showUnsubscribed', 'showErrors', 'showHelp', 'hideHelp', 'escape', 'returnToCard', 'confirmModal', 'closeModal'
+  'toggleQuickReview', 'toggleSelection', 'unsubscribe', 'keep', 'view', 'cleanup', 'reviewAgain', 'remove', 'fullScan', 'clearActivity', 'showPending', 'showKept', 'showUnsubscribed', 'showErrors', 'showHelp', 'escape', 'returnToCard', 'confirmModal', 'closeModal'
 ]);
 
 function updateContextShortcuts() {
@@ -1140,8 +1356,9 @@ function modalKeyboardCommand(event) {
     return 'confirmModal';
   }
   if (textControl) return null;
-  if (activeInsideModal?.id !== 'unsub-modal-overlay' &&
-      !document.getElementById('unsub-modal-overlay').classList.contains('open')) return null;
+  const directionalModalOpen = document.getElementById('unsub-modal-overlay').classList.contains('open') ||
+    document.getElementById('move-destinations-modal-overlay').classList.contains('open');
+  if (!directionalModalOpen) return null;
   if (['ArrowLeft', 'h'].includes(event.key)) return 'modalLeft';
   if (['ArrowRight', 'l'].includes(event.key)) return 'modalRight';
   if (['ArrowUp', 'k'].includes(event.key)) return 'modalUp';
@@ -1164,7 +1381,7 @@ function moveDestinationTreeFocus(radio, direction) {
       if (toggle) toggle.textContent = '▾';
       return;
     }
-    const firstChild = [...subtree.querySelectorAll('input[name="dest-folder"]')]
+    const firstChild = [...subtree.querySelectorAll(`input[name="${CSS.escape(radio.name)}"]`)]
       .find(control => !control.disabled && control.dataset.moveDisabled !== '1' && control.getClientRects().length > 0);
     if (firstChild) {
       firstChild.focus();
@@ -1182,7 +1399,8 @@ function moveDestinationTreeFocus(radio, direction) {
   const parentSubtree = node.parentElement?.closest?.('.tree-subtree');
   const parentId = parentSubtree?.dataset.parentId;
   if (!parentId) return;
-  const parent = document.querySelector(`#modal-dest-tree input[name="dest-folder"][value="${CSS.escape(parentId)}"]`);
+  const tree = radio.closest('.folder-tree');
+  const parent = tree?.querySelector(`input[name="${CSS.escape(radio.name)}"][value="${CSS.escape(parentId)}"]`);
   if (parent) {
     parent.focus();
     parent.scrollIntoView({ block: 'nearest' });
@@ -1207,7 +1425,7 @@ function moveModalFocus(direction) {
 
   if (direction === 'left' || direction === 'right') {
     // Cleanup choices are laid out horizontally.
-    if (active?.matches?.('input[name="dest-folder"]')) {
+    if (active?.matches?.('input[name="dest-folder"], input[name="settings-dest-folder"]')) {
       moveDestinationTreeFocus(active, direction);
       return;
     }
@@ -1227,7 +1445,7 @@ function moveModalFocus(direction) {
     .filter(control => !control.disabled && control.tabIndex >= 0 && control.getClientRects().length > 0)
     .filter(control => !control.closest('.modal-footer'))
     .filter(control => !control.matches('input[name="dispose"]') || control === disposeAnchor)
-    .filter(control => !control.matches('input[name="dest-folder"][data-move-disabled="1"]'));
+    .filter(control => !control.matches('input[name="dest-folder"][data-move-disabled="1"], input[name="settings-dest-folder"][data-move-disabled="1"]'));
   if (!controls.length) return;
   const current = controls.indexOf(active?.matches?.('input[name="dispose"]') ? disposeAnchor : active);
   const offset = direction === 'up' ? -1 : 1;
@@ -1242,12 +1460,14 @@ function closeActiveModal() {
   if (document.getElementById('unsub-modal-overlay').classList.contains('open')) cancelOrCloseUnsubModal();
   else if (document.getElementById('scope-modal-overlay').classList.contains('open')) closeScanScopeModal();
   else if (document.getElementById('activity-modal-overlay').classList.contains('open')) closeActivityModal();
+  else if (document.getElementById('move-destinations-modal-overlay').classList.contains('open')) closeMoveDestinationsModal();
 }
 
 async function confirmActiveModal() {
   if (document.getElementById('unsub-modal-overlay').classList.contains('open')) await doUnsubscribeConfirm();
   else if (document.getElementById('scope-modal-overlay').classList.contains('open')) await saveScanScope();
   else if (document.getElementById('activity-modal-overlay').classList.contains('open')) closeActivityModal();
+  else if (document.getElementById('move-destinations-modal-overlay').classList.contains('open')) await saveMoveDestinationsModal();
 }
 
 async function runQuickReviewCommand(command) {
@@ -1277,9 +1497,10 @@ async function runQuickReviewCommand(command) {
   } else if (command === 'toggleSelection' && focusedSubscriptionKey) {
     toggleCardSelection(focusedSubscriptionKey);
   } else if (command === 'unsubscribe' && sub) {
-    if (sub.decision === 'pending') {
+    if (quickReviewMode && selectedSubscriptionKeys.size) {
+      await quickUnsubscribeSelected();
+    } else if (sub.decision === 'pending') {
       if (!quickReviewMode) openUnsubModal(focusedSubscriptionKey);
-      else if (selectedSubscriptionKeys.size) await quickUnsubscribeSelected();
       else await quickUnsubscribe(focusedSubscriptionKey);
     } else if (sub.decision === 'unsubscribed' || sub.decision === 'error') {
       openUnsubModal(focusedSubscriptionKey, true);
@@ -1290,12 +1511,12 @@ async function runQuickReviewCommand(command) {
   } else if (command === 'view' && sub && subHasMessages(sub)) {
     await viewSelectedOrFocused();
   } else if (command === 'cleanup' && sub && sub.decision !== 'pending' && subHasMessages(sub)) {
-    openCleanupModal(focusedSubscriptionKey);
+    if (selectedSubscriptionKeys.size) await cleanupSelectedWithDefault();
+    else openCleanupModal(focusedSubscriptionKey);
   } else if (command === 'reviewAgain' && sub && sub.decision !== 'pending') {
-    await doPending(focusedSubscriptionKey);
+    await reviewSelectedOrFocused();
   } else if (command === 'remove' && sub) {
-    if (sub.decision === 'pending' && subHasMessages(sub)) await doJunk(focusedSubscriptionKey);
-    else if (sub.decision === 'unsubscribed' || sub.decision === 'error') await doDismiss(focusedSubscriptionKey);
+    await removeSelectedOrFocused();
   } else if (command === 'modalLeft') {
     moveModalFocus('left');
   } else if (command === 'modalRight') {
@@ -1308,11 +1529,11 @@ async function runQuickReviewCommand(command) {
   else if (command === 'fullScan') {
     if (!scanInProgress) await startScan();
   }
+  else if (command === 'clearActivity') {
+    clearFinishedActivity();
+  }
   else if (command === 'escape') {
     clearCardSelection();
-    document.getElementById('shortcut-help').classList.remove('open');
-  } else if (command === 'hideHelp') {
-    document.getElementById('shortcut-help').classList.remove('open');
   } else if (command === 'returnToCard') {
     closeKeepMenus();
     disableAllCardControls();
@@ -1597,7 +1818,7 @@ function buildCard(s) {
       s.recipientAddress && el('div', { class: 'card-accounts', title: `Delivered to ${s.recipientAddress}` }, `→ ${s.recipientAddress}`),
       s.sampleSubject && el('div', { class: 'card-subject', title: s.sampleSubject }, `"${s.sampleSubject.substring(0, 80)}"`),
       s.error?.message && el('div', { class: 'card-error', title: s.error.message }, `${s.error.stage || 'Error'}: ${s.error.message}`),
-      quickReviewDescription && (s.decision === 'pending' || s.decision === 'error') &&
+      quickReviewDescription && (s.decision === 'pending' || s.decision === 'unsubscribed' || s.decision === 'error') &&
         el('div', { class: 'quick-review-action-note', title: quickReviewDescription.title }, quickReviewDescription.text),
       SHOW_DETECTION_UI && el('button', { class: 'evidence-toggle js-evidence-toggle', type: 'button' }, 'Why detected?')),
     SHOW_DETECTION_UI && el('div', { class: 'detection-evidence' }, buildDetectionEvidence(s)),
@@ -1694,7 +1915,8 @@ function attachCardListeners() {
     }
 
     if (btn.classList.contains('js-cleanup')) {
-      openCleanupModal(btn.dataset.subscriptionKey);
+      if (selectedSubscriptionKeys.size) await cleanupSelectedWithDefault();
+      else openCleanupModal(btn.dataset.subscriptionKey);
       return;
     }
 
@@ -1730,37 +1952,43 @@ function toggleKeepMenu(button) {
   button.setAttribute('aria-expanded', willOpen ? 'true' : 'false');
 }
 
-async function doJunk(subscriptionKey) {
+async function doJunk(subscriptionKey, { confirmAction = true, silent = false } = {}) {
   const sub = findSubByKey(subscriptionKey);
-  if (!sub) return;
+  if (!sub) return { ok: false, junked: 0, dryRun: false };
   const count = (sub.messageGroups || []).reduce((sum, g) => sum + groupMessageCount(g), 0);
   const name = sub.senderName || sub.senderEmail;
-  if (!confirm(`Mark ${count} emails from ${name} as junk and move them to the spam folder? The sender will not be contacted.`)) return;
+  if (confirmAction && !confirm(`Mark ${count} emails from ${name} as junk and move them to the spam folder? The sender will not be contacted.`)) {
+    return { ok: false, junked: 0, dryRun: false };
+  }
 
   try {
     const result = await bg('junkEmails', { ...subRequest(sub), messageGroups: sub.messageGroups });
     if (result?.dryRun) {
-      toast(`Dry run: would mark ${result.junked || 0} emails as junk and move them to spam. No changes made.`, 'info');
+      if (!silent) toast(`Dry run: would mark ${result.junked || 0} emails as junk and move them to spam. No changes made.`, 'info');
     } else {
       const action = (result?.deleted || 0) > 0 && !(result?.movedToSpam || 0)
         ? 'deleted them (no spam folder found)'
         : 'moved them to spam';
-      toast(`Marked ${result.junked || 0} emails from ${name} as junk and ${action}`, 'success');
+      if (!silent) toast(`Marked ${result.junked || 0} emails from ${name} as junk and ${action}`, 'success');
       removeCachedSubscription(sub, true);
     }
+    return { ok: true, junked: result.junked || 0, dryRun: result?.dryRun === true };
   } catch (e) {
-    toast('Failed to junk emails: ' + (e.message || e), 'error');
+    if (!silent) toast('Failed to junk emails: ' + (e.message || e), 'error');
+    return { ok: false, junked: 0, dryRun: false };
   }
 }
 
-async function doDismiss(subscriptionKey) {
+async function doDismiss(subscriptionKey, silent = false) {
   const sub = findSubByKey(subscriptionKey);
-  if (!sub) return;
+  if (!sub) return false;
   try {
     await bg('dismiss', subRequest(sub));
     removeCachedSubscription(sub, true);
+    return true;
   } catch (e) {
-    toast('Failed to dismiss: ' + (e.message || e), 'error');
+    if (!silent) toast('Failed to dismiss: ' + (e.message || e), 'error');
+    return false;
   }
 }
 
@@ -1871,12 +2099,13 @@ function renderModalSourceFolders(sub) {
   const foldersSection = document.getElementById('modal-folders-section');
   const foldersEl = document.getElementById('modal-folders');
 
-  foldersEl.replaceChildren(...groups.map((g, i) =>
+  const rows = groups.map((g, i) =>
     el('label', { class: 'modal-folder-row' },
       el('input', { type: 'checkbox', class: 'modal-folder-check', 'data-idx': i, checked: true }),
       el('span', { class: 'modal-folder-name' }, `${g.accountName} | ${g.folderName}`),
-      el('span', { class: 'modal-folder-count' }, groupMessageCount(g)))));
-  foldersSection.style.display = groups.length > 0 ? 'block' : 'none';
+      el('span', { class: 'modal-folder-count' }, groupMessageCount(g))));
+  foldersEl.replaceChildren(...rows);
+  foldersSection.style.display = rows.length > 0 ? 'block' : 'none';
 }
 
 function openUnsubModal(subscriptionKey, isRetry = false) {
@@ -1968,7 +2197,7 @@ function openCleanupModal(subscriptionKey, action) {
   modalMode = 'cleanup';
   modalIsRetry = false;
   modalSelectedMethod = null;
-  cleanupDefaultAction = action;
+  cleanupDefaultAction = action || defaultUnsubscribeDispose;
   resetModalProgress();
 
   const statusLabel = sub.decision === 'error'
@@ -1994,7 +2223,7 @@ function openCleanupModal(subscriptionKey, action) {
   renderModalSourceFolders(sub);
   document.querySelector('.modal-dispose h4').textContent = 'Email action';
   document.querySelector('.modal-dispose').style.display = 'block';
-  document.querySelector(`input[name="dispose"][value="${action || 'keep'}"]`).checked = true;
+  document.querySelector(`input[name="dispose"][value="${cleanupDefaultAction}"]`).checked = true;
   document.getElementById('modal-dest-wrap').style.display = 'none';
   document.getElementById('modal-new-folder-form').style.display = 'none';
 
@@ -2116,7 +2345,7 @@ function renderFolderTree(tree) {
       renderFolderNodes(account.folders, 0))));
 }
 
-function renderFolderNodes(folders, depth) {
+function renderFolderNodes(folders, depth, radioName = 'dest-folder', selectedId = '') {
   const nodes = [];
   for (const f of folders) {
     const hasChildren = f.subFolders && f.subFolders.length > 0;
@@ -2139,14 +2368,14 @@ function renderFolderNodes(folders, depth) {
           ? el('span', { class: 'tree-toggle', 'data-folder-id': f.id }, '▸')
           : el('span', { class: 'tree-spacer' }),
         el('input', {
-          type: 'radio', name: 'dest-folder', value: f.id,
+          type: 'radio', name: radioName, value: f.id, checked: f.id === selectedId,
           'data-folder-name': f.name, 'data-folder-path': f.path || f.name,
           'data-move-disabled': isMoveTargetDisabled ? '1' : false
         }),
         el('span', { class: 'tree-folder-name' }, `${f.name}${isMoveTargetDisabled ? ' (cannot receive mail)' : ''}`))));
     if (hasChildren) {
       nodes.push(el('div', { class: 'tree-subtree', 'data-parent-id': f.id, style: 'display:none' },
-        renderFolderNodes(f.subFolders, depth + 1)));
+        renderFolderNodes(f.subFolders, depth + 1, radioName, selectedId)));
     }
   }
   return nodes;
@@ -2627,15 +2856,17 @@ async function doKeep(subscriptionKey) {
   }
 }
 
-async function doPending(subscriptionKey) {
+async function doPending(subscriptionKey, silent = false) {
   const sub = findSubByKey(subscriptionKey);
-  if (!sub) return;
+  if (!sub) return false;
   try {
     await bg('decide', { ...subRequest(sub), decision: 'pending', dispose: null });
-    toast(`Moved ${sub.senderEmail} back to pending`, 'success');
+    if (!silent) toast(`Moved ${sub.senderEmail} back to pending`, 'success');
     updateCachedDecision(sub, 'pending');
+    return true;
   } catch (e) {
-    toast('Error: ' + (e.message || e), 'error');
+    if (!silent) toast('Error: ' + (e.message || e), 'error');
+    return false;
   }
 }
 
@@ -2928,12 +3159,7 @@ function pollScanStatus() {
 
 // ── Init ─────────────────────────────────────────────────────────────────────
 document.addEventListener('DOMContentLoaded', async () => {
-  window.addEventListener('resize', () => {
-    positionToastContainer();
-    if (document.getElementById('move-destinations-popover').classList.contains('open')) {
-      positionMoveDestinationsPopover();
-    }
-  });
+  window.addEventListener('resize', positionToastContainer);
   window.addEventListener('focus', updateKeyboardShortcutHint);
   window.addEventListener('blur', updateKeyboardShortcutHint);
   updateKeyboardShortcutHint();
@@ -2945,7 +3171,13 @@ document.addEventListener('DOMContentLoaded', async () => {
   });
   document.addEventListener('click', (e) => {
     if (!e.target.closest('.keep-split')) closeKeepMenus();
-    if (!e.target.closest('#move-destinations-popover, #move-destinations-btn')) closeMoveDestinationsPopover();
+  });
+  document.getElementById('sidebar').addEventListener('click', (e) => {
+    const button = e.target.closest('button');
+    if (button) button.blur();
+  });
+  document.getElementById('sidebar').addEventListener('change', (e) => {
+    if (e.target.matches('input, select')) e.target.blur();
   });
   document.getElementById('scan-btn').addEventListener('click', startScan);
 
@@ -2980,17 +3212,60 @@ document.addEventListener('DOMContentLoaded', async () => {
     updateDefaultUnsubscribeDispose(e.target.value);
   });
   document.getElementById('move-destinations-btn').addEventListener('click', () => {
-    const popover = document.getElementById('move-destinations-popover');
-    if (popover.classList.contains('open')) closeMoveDestinationsPopover();
-    else openMoveDestinationsPopover();
+    openMoveDestinationsModal();
   });
-  document.getElementById('move-destinations-close').addEventListener('click', closeMoveDestinationsPopover);
-  document.getElementById('move-destinations-popover').addEventListener('keydown', (e) => {
-    if (e.key !== 'Escape') return;
-    e.preventDefault();
-    e.stopPropagation();
-    closeMoveDestinationsPopover();
-    document.getElementById('move-destinations-btn').focus();
+  document.getElementById('move-destinations-cancel').addEventListener('click', closeMoveDestinationsModal);
+  document.getElementById('move-destinations-save').addEventListener('click', saveMoveDestinationsModal);
+  document.getElementById('move-destinations-modal-overlay').addEventListener('click', (e) => {
+    if (e.target.id === 'move-destinations-modal-overlay') closeMoveDestinationsModal();
+  });
+  document.getElementById('move-destinations-list').addEventListener('click', (e) => {
+    const summary = e.target.closest('.move-destination-summary');
+    if (summary) {
+      const address = summary.dataset.identityAddress;
+      expandedMoveDestinationIdentity = expandedMoveDestinationIdentity === address ? '' : address;
+      closeMoveDestinationCreateForm();
+      renderMoveDestinationSettings(expandedMoveDestinationIdentity);
+      return;
+    }
+    const newFolder = e.target.closest('.move-destination-new-folder');
+    if (newFolder) {
+      openMoveDestinationCreateForm(newFolder.dataset.identityAddress);
+      return;
+    }
+    const toggle = e.target.closest('.tree-toggle');
+    if (toggle) {
+      e.preventDefault();
+      const subtree = e.target.closest('.tree-node')?.nextElementSibling;
+      if (!subtree?.classList.contains('tree-subtree')) return;
+      const open = subtree.style.display !== 'none';
+      subtree.style.display = open ? 'none' : 'block';
+      toggle.textContent = open ? '▸' : '▾';
+    }
+  });
+  document.getElementById('move-destinations-list').addEventListener('change', (e) => {
+    const radio = e.target.closest('input[name="settings-dest-folder"]');
+    if (!radio || !expandedMoveDestinationIdentity) return;
+    const { account } = moveDestinationIdentityRows()
+      .find(row => row.address === expandedMoveDestinationIdentity) || {};
+    const destination = account && flattenMoveFolders(account, account.folders)
+      .find(folder => folder.id === radio.value);
+    if (destination) moveDestinationDraft[expandedMoveDestinationIdentity] = destination;
+    else delete moveDestinationDraft[expandedMoveDestinationIdentity];
+    const current = radio.closest('.move-destination-row')?.querySelector('.move-destination-current');
+    if (current) {
+      current.textContent = destination ? (destination.folderPath || destination.folderName) : 'Ask each time';
+      current.title = destination?.label || 'Ask each time';
+    }
+  });
+  document.getElementById('move-destination-create-cancel').addEventListener('click', closeMoveDestinationCreateForm);
+  document.getElementById('move-destination-create-confirm').addEventListener('click', createMoveDestinationFolder);
+  document.getElementById('move-destination-folder-name').addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      e.stopPropagation();
+      createMoveDestinationFolder();
+    }
   });
   document.getElementById('quick-review-mode-toggle').addEventListener('change', (e) => {
     updateQuickReviewMode(e.target.checked);

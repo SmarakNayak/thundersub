@@ -102,13 +102,25 @@
   </div>
 </div>
 
-<div id="move-destinations-popover" role="dialog" aria-label="Move destinations">
-  <div class="move-destinations-header">
-    <strong>Move destinations</strong>
-    <button id="move-destinations-close" type="button" aria-label="Close">×</button>
+<div id="move-destinations-modal-overlay" class="modal-overlay">
+  <div class="modal move-destinations-modal" role="dialog" aria-labelledby="move-destinations-title">
+    <h3 id="move-destinations-title">Move destinations</h3>
+    <div class="move-destinations-hint">Choose a default folder for each identity. Unconfigured identities ask each time.</div>
+    <div class="move-destinations-content">
+      <h4>Identities</h4>
+      <div id="move-destinations-list"></div>
+      <div id="move-destination-create-form" class="move-destination-create-form">
+        <div id="move-destination-create-label"></div>
+        <input id="move-destination-folder-name" type="text" placeholder="Folder name">
+        <button id="move-destination-create-cancel" class="btn btn-muted" type="button">Cancel</button>
+        <button id="move-destination-create-confirm" class="btn btn-accent" type="button">Create</button>
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button id="move-destinations-cancel" class="btn btn-muted" type="button">Cancel</button>
+      <button id="move-destinations-save" class="btn btn-accent" type="button">Save</button>
+    </div>
   </div>
-  <div class="move-destinations-hint">Choose a default folder for each identity. Unconfigured identities ask each time.</div>
-  <div id="move-destinations-list"></div>
 </div>
 
 <div id="main">
@@ -141,7 +153,7 @@
   <div id="shortcut-help" role="status">
     <strong>Keyboard shortcuts</strong>
     <span id="context-shortcuts"></span>
-    <span><kbd>←</kbd><kbd>↓</kbd><kbd>↑</kbd><kbd>→</kbd> or <kbd>h</kbd><kbd>j</kbd><kbd>k</kbd><kbd>l</kbd> move · <kbd>g</kbd>/<kbd>G</kbd> first/last · <kbd>S</kbd> full scan · <kbd>q</kbd> toggle Quick Review · <kbd>Space</kbd> select · <kbd>Enter</kbd> submit · <kbd>Esc</kbd> cancel · <kbd>1</kbd>/<kbd>2</kbd>/<kbd>3</kbd>/<kbd>4</kbd> Pending/Kept/Unsubscribed/Errors</span>
+    <span><kbd>←</kbd><kbd>↓</kbd><kbd>↑</kbd><kbd>→</kbd> or <kbd>h</kbd><kbd>j</kbd><kbd>k</kbd><kbd>l</kbd> move · <kbd>g</kbd>/<kbd>G</kbd> first/last · <kbd>S</kbd> full scan · <kbd>C</kbd> clear activity · <kbd>q</kbd> toggle Quick Review · <kbd>Space</kbd> select · <kbd>Enter</kbd> submit · <kbd>Esc</kbd> clear selection/cancel modal · <kbd>1</kbd>/<kbd>2</kbd>/<kbd>3</kbd>/<kbd>4</kbd> Pending/Kept/Unsubscribed/Errors</span>
   </div>
   <div id="cards-grid" role="grid" aria-label="Subscriptions">
     <div id="loading"><div class="spinner"></div>Loading...</div>
