@@ -25,6 +25,8 @@ let currentSort = 'recent';
 const SHOW_DETECTION_UI = false;
 let activityQueue = [];
 let activeActivityJob = null;
+let activeActivityPromise = null;
+let activityAcceptingJobs = true;
 let recentActivityJobs = [];
 let nextActivityJobId = 1;
 let activityModalJobId = null;
@@ -222,6 +224,10 @@ function clearProcessingFlag(job) {
 }
 
 function enqueueActivityJob(job) {
+  if (!activityAcceptingJobs) {
+    toast('Full Reset is waiting for activity to stop', 'info');
+    return;
+  }
   const queuedJob = {
     id: nextActivityJobId++,
     status: 'queued',
@@ -245,20 +251,25 @@ function enqueueActivityJob(job) {
 
 async function runNextActivityJob() {
   if (activeActivityJob || activityQueue.length === 0) return;
-  activeActivityJob = activityQueue.shift();
-  activeActivityJob.status = 'running';
+  const job = activityQueue.shift();
+  activeActivityJob = job;
+  job.status = 'running';
   renderActivityQueue();
-  try {
-    await processActivityJob(activeActivityJob);
-  } catch (e) {
-    activeActivityJob.status = 'failed';
-    setActivityJobProgress(activeActivityJob, `Failed: ${e.message || e}`, 100);
-    clearProcessingFlag(activeActivityJob);
-  }
-  const finishedJob = activeActivityJob;
-  activeActivityJob = null;
-  recentActivityJobs = [finishedJob, ...recentActivityJobs];
-  renderActivityQueue();
+  const completion = (async () => {
+    try {
+      await processActivityJob(job);
+    } catch (e) {
+      job.status = 'failed';
+      setActivityJobProgress(job, `Failed: ${e.message || e}`, 100);
+      clearProcessingFlag(job);
+    }
+    if (activeActivityJob === job) activeActivityJob = null;
+    recentActivityJobs = [job, ...recentActivityJobs];
+    renderActivityQueue();
+  })();
+  activeActivityPromise = completion;
+  await completion;
+  if (activeActivityPromise === completion) activeActivityPromise = null;
   runNextActivityJob();
 }
 
@@ -268,10 +279,10 @@ function dismissActivityJob(jobId) {
   renderActivityQueue();
 }
 
-function clearFinishedActivity() {
+function clearFinishedActivity({ silent = false } = {}) {
   const cleared = recentActivityJobs.length;
   if (!cleared) {
-    toast('No finished activity to clear', 'info');
+    if (!silent) toast('No finished activity to clear', 'info');
     return;
   }
   if (activityModalJobId != null && recentActivityJobs.some(job => job.id === activityModalJobId)) {
@@ -279,15 +290,29 @@ function clearFinishedActivity() {
   }
   recentActivityJobs = [];
   renderActivityQueue();
-  toast(`Cleared ${cleared} activity ${cleared === 1 ? 'item' : 'items'}`, 'success');
+  if (!silent) toast(`Cleared ${cleared} activity ${cleared === 1 ? 'item' : 'items'}`, 'success');
 }
 
-function clearActivityQueue() {
+function cancelQueuedActivityJobs() {
+  const cancelled = activityQueue;
   activityQueue = [];
-  activeActivityJob = null;
-  recentActivityJobs = [];
-  closeActivityModal();
+  for (const job of cancelled) {
+    job.status = 'cancelled';
+    job.message = 'Cancelled by Full Reset before it started';
+    job.progress = 100;
+  }
+  recentActivityJobs = [...cancelled, ...recentActivityJobs];
+  syncProcessingFlags();
+  renderFilteredCards();
   renderActivityQueue();
+}
+
+async function cancelActiveActivityJobAndWait() {
+  const job = activeActivityJob;
+  const processing = activeActivityPromise;
+  if (!job || !processing) return;
+  await cancelActivityJob(job.id);
+  await processing;
 }
 
 function activityDetailRows(job) {
@@ -736,8 +761,11 @@ async function doFullReset() {
   const btn = document.getElementById('full-reset-btn');
   btn.disabled = true;
   btn.textContent = 'Resetting...';
+  activityAcceptingJobs = false;
 
   try {
+    cancelQueuedActivityJobs();
+    await cancelActiveActivityJobAndWait();
     await bg('fullReset');
     document.getElementById('progress-wrap').style.display = 'none';
     document.getElementById('scan-controls').style.display = 'none';
@@ -747,7 +775,7 @@ async function doFullReset() {
     document.getElementById('pause-btn').textContent = 'Pause';
     document.getElementById('stop-btn').disabled = false;
     document.getElementById('stop-btn').textContent = 'Stop';
-    clearActivityQueue();
+    clearFinishedActivity({ silent: true });
 
     currentFilter = 'pending';
     document.querySelectorAll('.filter-tab').forEach(t => t.classList.remove('active'));
@@ -759,6 +787,7 @@ async function doFullReset() {
   } catch (e) {
     toast('Full reset failed: ' + (e.message || e), 'error');
   } finally {
+    activityAcceptingJobs = true;
     btn.disabled = false;
     btn.textContent = 'Full Reset';
   }
@@ -1038,6 +1067,13 @@ function clearCardSelection() {
   updateQuickReviewBar();
 }
 
+function selectedOrFocusedSubscriptions() {
+  const keys = selectedSubscriptionKeys.size
+    ? [...selectedSubscriptionKeys]
+    : focusedSubscriptionKey ? [focusedSubscriptionKey] : [];
+  return keys.map(findSubByKey).filter(Boolean);
+}
+
 function allSourceFolders(sub) {
   return (sub.messageGroups || []).map(group => ({
     accountName: group.accountName,
@@ -1107,9 +1143,7 @@ async function quickUnsubscribe(subscriptionKey) {
 }
 
 async function quickUnsubscribeSelected() {
-  const subs = [...selectedSubscriptionKeys]
-    .map(findSubByKey)
-    .filter(sub => sub && !sub.processing);
+  const subs = selectedOrFocusedSubscriptions().filter(sub => !sub.processing);
   if (!subs.length) return;
   if (defaultUnsubscribeDispose === 'move') {
     const destinations = await Promise.all(subs.map(configuredMoveDestination));
@@ -1129,38 +1163,35 @@ async function quickUnsubscribeSelected() {
   renderFilteredCards();
 }
 
-async function keepSelected() {
-  const keys = [...selectedSubscriptionKeys];
-  clearCardSelection();
-  for (const key of keys) await doKeep(key);
+async function keepSelectedOrFocused() {
+  const subs = selectedOrFocusedSubscriptions().filter(sub => sub.decision === 'pending');
+  if (selectedSubscriptionKeys.size) clearCardSelection();
+  for (const sub of subs) await doKeep(subKey(sub));
 }
 
 async function reviewSelectedOrFocused() {
-  const keys = selectedSubscriptionKeys.size
-    ? [...selectedSubscriptionKeys]
-    : focusedSubscriptionKey ? [focusedSubscriptionKey] : [];
-  if (!keys.length) return;
-  const batch = keys.length > 1;
+  const subs = selectedOrFocusedSubscriptions().filter(sub => sub.decision !== 'pending');
+  if (!subs.length) return;
+  const batch = subs.length > 1;
   if (selectedSubscriptionKeys.size) clearCardSelection();
   let moved = 0;
-  for (const key of keys) {
-    if (await doPending(key, batch)) moved++;
+  for (const sub of subs) {
+    if (await doPending(subKey(sub), batch)) moved++;
   }
   if (batch && moved) toast(`Moved ${moved} subscriptions back to pending`, 'success');
-  if (batch && moved < keys.length) toast(`Failed to move ${keys.length - moved} subscriptions`, 'error');
+  if (batch && moved < subs.length) toast(`Failed to move ${subs.length - moved} subscriptions`, 'error');
 }
 
 async function removeSelectedOrFocused() {
-  if (!selectedSubscriptionKeys.size) {
-    const sub = findSubByKey(focusedSubscriptionKey);
-    if (!sub) return;
+  const subs = selectedOrFocusedSubscriptions();
+  if (!subs.length) return;
+  if (subs.length === 1 && !selectedSubscriptionKeys.size) {
+    const sub = subs[0];
     if (sub.decision === 'pending' && subHasMessages(sub)) await doJunk(focusedSubscriptionKey);
     else if (sub.decision === 'unsubscribed' || sub.decision === 'error') await doDismiss(focusedSubscriptionKey);
     return;
   }
 
-  const subs = [...selectedSubscriptionKeys].map(findSubByKey).filter(Boolean);
-  if (!subs.length) return;
   if (subs.every(sub => sub.decision === 'pending')) {
     const eligible = subs.filter(subHasMessages);
     const emailCount = eligible.reduce((sum, sub) =>
@@ -1193,10 +1224,7 @@ async function removeSelectedOrFocused() {
 }
 
 async function viewSelectedOrFocused() {
-  const keys = selectedSubscriptionKeys.size
-    ? [...selectedSubscriptionKeys]
-    : focusedSubscriptionKey ? [focusedSubscriptionKey] : [];
-  const subs = keys.map(findSubByKey).filter(Boolean);
+  const subs = selectedOrFocusedSubscriptions().filter(subHasMessages);
   if (!subs.length) return;
   let failures = 0;
   for (const selectedSub of subs) {
@@ -1212,9 +1240,8 @@ async function viewSelectedOrFocused() {
 }
 
 async function cleanupSelectedWithDefault() {
-  const subs = [...selectedSubscriptionKeys]
-    .map(findSubByKey)
-    .filter(sub => sub && sub.decision !== 'pending' && subHasMessages(sub) && !sub.processing);
+  const subs = selectedOrFocusedSubscriptions()
+    .filter(sub => sub.decision !== 'pending' && subHasMessages(sub) && !sub.processing);
   if (!subs.length) return;
 
   const dispose = defaultUnsubscribeDispose;
@@ -1471,7 +1498,8 @@ async function confirmActiveModal() {
 }
 
 async function runQuickReviewCommand(command) {
-  const sub = findSubByKey(focusedSubscriptionKey);
+  const targets = selectedOrFocusedSubscriptions();
+  const sub = targets[0];
   if (command === 'showHelp') {
     document.getElementById('shortcut-help').classList.toggle('open');
   } else if (command === 'toggleQuickReview') {
@@ -1496,26 +1524,25 @@ async function runQuickReviewCommand(command) {
     setFocusedCard(keys[keys.length - 1], true, true);
   } else if (command === 'toggleSelection' && focusedSubscriptionKey) {
     toggleCardSelection(focusedSubscriptionKey);
-  } else if (command === 'unsubscribe' && sub) {
-    if (quickReviewMode && selectedSubscriptionKeys.size) {
+  } else if (command === 'unsubscribe') {
+    if (selectedSubscriptionKeys.size) {
       await quickUnsubscribeSelected();
-    } else if (sub.decision === 'pending') {
+    } else if (sub?.decision === 'pending') {
       if (!quickReviewMode) openUnsubModal(focusedSubscriptionKey);
       else await quickUnsubscribe(focusedSubscriptionKey);
-    } else if (sub.decision === 'unsubscribed' || sub.decision === 'error') {
+    } else if (sub?.decision === 'unsubscribed' || sub?.decision === 'error') {
       openUnsubModal(focusedSubscriptionKey, true);
     }
-  } else if (command === 'keep' && sub && sub.decision === 'pending') {
-    if (selectedSubscriptionKeys.size) await keepSelected();
-    else await doKeep(focusedSubscriptionKey);
-  } else if (command === 'view' && sub && subHasMessages(sub)) {
+  } else if (command === 'keep') {
+    await keepSelectedOrFocused();
+  } else if (command === 'view') {
     await viewSelectedOrFocused();
-  } else if (command === 'cleanup' && sub && sub.decision !== 'pending' && subHasMessages(sub)) {
+  } else if (command === 'cleanup') {
     if (selectedSubscriptionKeys.size) await cleanupSelectedWithDefault();
-    else openCleanupModal(focusedSubscriptionKey);
-  } else if (command === 'reviewAgain' && sub && sub.decision !== 'pending') {
+    else if (sub && sub.decision !== 'pending' && subHasMessages(sub)) openCleanupModal(focusedSubscriptionKey);
+  } else if (command === 'reviewAgain') {
     await reviewSelectedOrFocused();
-  } else if (command === 'remove' && sub) {
+  } else if (command === 'remove') {
     await removeSelectedOrFocused();
   } else if (command === 'modalLeft') {
     moveModalFocus('left');
@@ -3271,7 +3298,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     updateQuickReviewMode(e.target.checked);
   });
   document.getElementById('quick-review-clear-selection').addEventListener('click', clearCardSelection);
-  document.getElementById('quick-review-keep-selected').addEventListener('click', keepSelected);
+  document.getElementById('quick-review-keep-selected').addEventListener('click', keepSelectedOrFocused);
   document.getElementById('quick-review-unsub-selected').addEventListener('click', quickUnsubscribeSelected);
   document.getElementById('full-reset-btn').addEventListener('click', doFullReset);
   document.getElementById('activity-list').addEventListener('click', (e) => {
