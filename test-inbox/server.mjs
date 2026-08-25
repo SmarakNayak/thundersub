@@ -6,7 +6,19 @@ const server = http.createServer((request, response) => {
     return;
   }
   if (request.url === '/fail') {
-    setTimeout(() => response.writeHead(503).end(), 8000);
+    setTimeout(() => response
+      .writeHead(503, 'Service Unavailable', { 'Content-Type': 'text/plain; charset=utf-8' })
+      .end('Synthetic unsubscribe provider is temporarily unavailable. Please retry later.'), 8000);
+    return;
+  }
+  if (request.url === '/fail-json') {
+    response
+      .writeHead(422, 'Unprocessable Content', { 'Content-Type': 'application/json; charset=utf-8' })
+      .end(JSON.stringify({
+        error: 'subscription_not_found',
+        message: 'No active subscription exists for this recipient.',
+        retryable: false
+      }));
     return;
   }
   if (request.url === '/success') {

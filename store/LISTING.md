@@ -62,6 +62,14 @@ ThunderSub auto-picks the best available method: silent one-click POST, unsubscr
 <b>Cleanup included</b>
 Delete a sender's entire back catalog (to Trash, never permanently), move it to any folder — with per-folder control over which copies are touched — or mark phishing senders as junk to train your spam filter without ever contacting them.
 
+<b>Quick Review</b>
+Process large review queues without repetitive dialogs. Navigate with arrow keys or familiar h/j/k/l controls, select multiple senders, then unsubscribe, keep, view, clean up, retry, dismiss, mark as spam, or return them for review as a batch. The action bar and shortcut guide change with the active Pending, Kept, Unsubscribed, or Errors list.
+
+Choose a default unsubscribe cleanup action: leave existing emails, delete them, or move them. Move destinations can be saved separately for each Thunderbird identity, so mixed-account batches still file mail into the right mailbox.
+
+<b>Visible background work</b>
+Unsubscribe and cleanup actions run through an Activity feed with queued/running/completed status, progress details, cancellation, and failure context, so a large batch never becomes a black box.
+
 <b>Safe by default</b>
 Existing emails are kept on unsubscribe unless you choose otherwise. Senders without the standard unsubscribe header get a warning before you act, and one-click requests are only ever sent to validated public https endpoints. Want to explore risk-free first? Dry-run mode simulates every unsubscribe, delete, and move and reports what would have happened.
 
@@ -114,17 +122,24 @@ Ready to upload from `store/screenshots/`, in this order, with these captions:
 3. `03-scan-progress.png` — "Scanning every folder with live progress — pause, resume, or stop at any time without losing results."
 4. `04-unsubscribed.png` — "Track what you've unsubscribed from, retry with another method, or clean up leftover emails later."
 5. `05-scan-scope.png` — "Control the scan: choose accounts and folders, and skip senders or whole domains before they're ever read."
+6. `06-quick-review.png` — "Quick Review: navigate by keyboard, select multiple subscriptions, and run the action for the whole selection."
+7. `07-move-destinations.png` — "Save a different move destination for each Thunderbird identity, or create a new folder without leaving ThunderSub."
 
 They show the real tab UI (unmodified `tab/tab.html`/`tab.css`/`tab.js`) rendered with fictional
 demo data (`.example` senders, `alex@example.net` recipient) — regenerate any time with
 `bash store/screenshots/make.sh` (needs chromium or nix).
 
-## Release notes (1.0.14)
+## Release notes (1.1.0)
 
 ```
-Maintenance release.
+Version 1.1.0 — Quick Review and workflow update.
 
-• Fixed the runtime message listener to return promises only for messages it handles, avoiding response conflicts with other listeners.
+• Added keyboard-first navigation and contextual shortcuts across every review list.
+• Added Quick Review multi-select with matching contextual batch-action buttons.
+• Added instant unsubscribe and batch cleanup using the saved cleanup default.
+• Added per-identity move destinations, including folder creation.
+• Added batch retry, review again, view, spam, dismiss, keep, and cleanup actions.
+• Improved unsubscribe destination details, errors, cancellation, and safe Full Reset handling.
 
 Compatible with Thunderbird 128 and later.
 ```
@@ -134,9 +149,7 @@ Compatible with Thunderbird 128 and later.
 ## Notes to reviewers (paste into "Notes to Reviewer" on upload)
 
 ```
-Version 1.0.14 addresses the review feedback on 1.0.13: the runtime.onMessage listener is no longer asynchronous and now returns undefined for unhandled messages. Handled messages continue to return their response promise.
-
-Source is plain, unminified JavaScript with no build step and no third-party libraries — the uploaded XPI is the source (repo: https://github.com/SmarakNayak/thundersub).
+Source is plain, unminified JavaScript with no third-party runtime libraries. build.sh performs deterministic XPI packaging; the uploaded XPI contains the readable source (repo: https://github.com/SmarakNayak/thundersub).
 
 The background runs as an ES module via a background page (background.html): background.js imports the localized unsubscribe-wording list from unsub-detect.js (embedded unsubscribe links in 13 languages), the sender skip-pattern matcher from scan-scope.js, the unsubscribe URL safety gates from unsub-url.js, and account-ID-based junk-folder routing from junk-routing.js. All matching is local regex matching; no translation service or network involvement.
 
@@ -153,5 +166,5 @@ Permission justifications:
 
 No remote code is loaded or executed. The UI never uses innerHTML: all rendering goes through a createElement/textContent element builder (el() in tab/tab.js), so strings from emails can only become text nodes and are never parsed as HTML. No user data leaves the machine.
 
-Testing tip: click the toolbar button -> "Open ThunderSub" -> "Scan Emails" against any profile with newsletter mail. Enabling the "Dry Run" toggle in the sidebar makes every action simulated and reported via toasts instead of executed.
+Testing tip: click the toolbar button -> "Open ThunderSub" -> "Scan Emails" against any profile with newsletter mail. Enabling the "Dry Run" toggle in the sidebar makes every action simulated and reported via toasts instead of executed. The repository also includes test-inbox.sh, which launches a disposable Thunderbird profile with deterministic fictional subscriptions across multiple inboxes, identities, and aliases.
 ```

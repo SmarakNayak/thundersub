@@ -25,3 +25,33 @@ MIME-Version: 1.0
 Content-Type: text/plain; charset=utf-8
 
 Synthetic newsletter whose unsubscribe request succeeds when processed normally.
+
+From - Thu Aug 20 09:02:00 2026
+From: Error Subscription <errors@queue-repro.invalid>
+To: ThunderSub Tester <tester@thundersub.invalid>
+Subject: Error detail reproduction subscription
+Date: Thu, 20 Aug 2026 09:02:00 +1000
+Message-ID: <error-details@queue-repro.invalid>
+List-ID: Error Subscription <errors.queue-repro.invalid>
+List-Unsubscribe: <http://127.0.0.1:8765/fail>
+List-Unsubscribe-Post: List-Unsubscribe=One-Click
+MIME-Version: 1.0
+Content-Type: text/plain; charset=utf-8
+
+Synthetic newsletter whose failed unsubscribe exposes HTTP status 503,
+status text Service Unavailable, and a plaintext response message.
+
+From - Thu Aug 20 09:03:00 2026
+From: JSON Error Subscription <json-errors@queue-repro.invalid>
+To: ThunderSub Tester <tester@thundersub.invalid>
+Subject: JSON error detail reproduction subscription
+Date: Thu, 20 Aug 2026 09:03:00 +1000
+Message-ID: <json-error-details@queue-repro.invalid>
+List-ID: JSON Error Subscription <json-errors.queue-repro.invalid>
+List-Unsubscribe: <http://127.0.0.1:8765/fail-json>
+List-Unsubscribe-Post: List-Unsubscribe=One-Click
+MIME-Version: 1.0
+Content-Type: text/plain; charset=utf-8
+
+Synthetic newsletter whose unsubscribe returns HTTP 422 Unprocessable Content
+with a structured JSON error response.

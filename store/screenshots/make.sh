@@ -33,3 +33,5 @@ shoot modal        02-unsubscribe-modal.png
 shoot scan         03-scan-progress.png
 shoot unsubscribed 04-unsubscribed.png
 shoot scope        05-scan-scope.png
+shoot quick        06-quick-review.png
+shoot destinations 07-move-destinations.png

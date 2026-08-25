@@ -6,7 +6,7 @@
 'use strict';
 
 const SHOT = new URLSearchParams(location.search).get('shot') || 'dashboard';
-const NOW = Date.now();
+const NOW = Date.UTC(2026, 7, 25, 12, 0, 0);
 const MIN = 60000, DAY = 86400000;
 
 function iso(msAgo) { return new Date(NOW - msAgo).toISOString(); }
@@ -95,6 +95,31 @@ const SCANNING = {
   done: false, paused: false, stopped: false
 };
 
+const FOLDER_TREE = [
+  { accountId: 'a1', accountName: 'Personal', rootFolderId: 'personal-root',
+    identities: [{ email: 'alex@example.net' }, { email: 'alex+deals@example.net' }], folders: [
+      { id: 'p-inbox', name: 'Inbox', path: 'Inbox', subFolders: [] },
+      { id: 'p-archive', name: 'Archive', path: 'Archive', subFolders: [
+        { id: 'p-newsletters', name: 'Newsletters', path: 'Archive/Newsletters', subFolders: [] },
+        { id: 'p-receipts', name: 'Receipts', path: 'Archive/Receipts', subFolders: [] }
+      ] },
+      { id: 'p-travel', name: 'Travel', path: 'Travel', subFolders: [] }
+    ] },
+  { accountId: 'a2', accountName: 'Work', rootFolderId: 'work-root',
+    identities: [{ email: 'alex@work.example' }], folders: [
+      { id: 'w-inbox', name: 'Inbox', path: 'Inbox', subFolders: [] },
+      { id: 'w-newsletters', name: 'Newsletters', path: 'Newsletters', subFolders: [] },
+      { id: 'w-archive', name: 'Archive', path: 'Archive', subFolders: [] }
+    ] }
+];
+
+const MOVE_DESTINATIONS = {
+  'alex@example.net': {
+    id: 'p-newsletters', accountId: 'a1', accountName: 'Personal',
+    folderName: 'Newsletters', folderPath: 'Archive/Newsletters', label: 'Personal | Archive/Newsletters'
+  }
+};
+
 // The scope shot shows a lived-in configuration (an excluded folder and
 // skip patterns); every other shot keeps the default "all folders" scope.
 const SCOPE = {
@@ -127,6 +152,13 @@ globalThis.browser = {
       switch (request.command) {
         case 'getDryRun': return Promise.resolve({ dryRun: false });
         case 'getAutoSendUnsubscribeEmails': return Promise.resolve({ autoSendUnsubscribeEmails: false });
+        case 'getDefaultUnsubscribeDispose': return Promise.resolve({
+          defaultUnsubscribeDispose: SHOT === 'destinations' ? 'move' : 'keep'
+        });
+        case 'getMoveDestinationsByIdentity': return Promise.resolve({ moveDestinationsByIdentity: MOVE_DESTINATIONS });
+        case 'getQuickReviewMode': return Promise.resolve({
+          quickReviewMode: SHOT === 'quick' || SHOT === 'unsubscribed'
+        });
         case 'getStats': return Promise.resolve(SHOT === 'scan'
           ? Object.assign({}, STATS, { lastScanAt: null }) : STATS);
         case 'getSubscriptions': {
@@ -139,7 +171,7 @@ globalThis.browser = {
           : { status: 'idle', progress: 0, total: 0, message: '', done: false });
         case 'scan': return Promise.resolve({ ok: true });
         case 'getScanScope': return Promise.resolve(JSON.parse(JSON.stringify(SCOPE)));
-        case 'getFolderTree': return Promise.resolve([]);
+        case 'getFolderTree': return Promise.resolve(JSON.parse(JSON.stringify(FOLDER_TREE)));
         default: return Promise.resolve({ ok: true });
       }
     }
@@ -158,9 +190,19 @@ function clickWhenReady(selector, attempts = 50) {
 
 document.addEventListener('DOMContentLoaded', () => {
   if (SHOT === 'modal') {
-    clickWhenReady('.card[data-sender-email="deals@flightdeals.example"] .js-open-modal');
+    clickWhenReady('.card .js-open-modal');
+  } else if (SHOT === 'quick') {
+    clickWhenReady('.card:nth-child(1) .js-card-select');
+    setTimeout(() => clickWhenReady('.card:nth-child(2) .js-card-select'), 150);
+    setTimeout(() => clickWhenReady('.card:nth-child(3) .js-card-select'), 300);
+    setTimeout(() => document.dispatchEvent(new KeyboardEvent('keydown', { key: '?' })), 450);
+  } else if (SHOT === 'destinations') {
+    clickWhenReady('#move-destinations-btn');
+    setTimeout(() => clickWhenReady('.move-destination-summary[data-identity-address="alex@example.net"]'), 250);
   } else if (SHOT === 'unsubscribed') {
     clickWhenReady('.filter-tab[data-filter="unsubscribed"]');
+    setTimeout(() => clickWhenReady('.card:nth-child(2) .js-card-select'), 150);
+    setTimeout(() => clickWhenReady('.card:nth-child(3) .js-card-select'), 300);
   } else if (SHOT === 'scope') {
     clickWhenReady('#scan-scope-btn');
     // Once the modal's tree renders, expand Archive so the excluded

@@ -4,13 +4,15 @@
 
 No cloud service. No account. No one reading your mail. Everything runs locally inside Thunderbird.
 
-![ThunderSub dashboard — every subscription across your accounts in one place](store/screenshots/01-dashboard.png)
+![ThunderSub Quick Review — select subscriptions and process them together](store/screenshots/06-quick-review.png)
 
-| Unsubscribe & clean up in one step | Live scan progress |
+| Dashboard across every account | Unsubscribe & clean up in one step |
 |---|---|
-| ![Unsubscribe modal](store/screenshots/02-unsubscribe-modal.png) | ![Scan in progress](store/screenshots/03-scan-progress.png) |
-| **Choose exactly what gets scanned** | **Track what you've left** |
-| ![Scan scope modal](store/screenshots/05-scan-scope.png) | ![Unsubscribed view](store/screenshots/04-unsubscribed.png) |
+| ![Subscription dashboard](store/screenshots/01-dashboard.png) | ![Unsubscribe modal](store/screenshots/02-unsubscribe-modal.png) |
+| **Move to a saved folder per identity** | **Choose exactly what gets scanned** |
+| ![Move destinations](store/screenshots/07-move-destinations.png) | ![Scan scope modal](store/screenshots/05-scan-scope.png) |
+| **Watch long scans as they run** | **Batch-manage completed subscriptions** |
+| ![Scan in progress](store/screenshots/03-scan-progress.png) | ![Unsubscribed Quick Review](store/screenshots/04-unsubscribed.png) |
 
 ---
 
@@ -56,7 +58,11 @@ For each sender, ThunderSub auto-selects the best available method:
 Did a one-click request bounce? Hit **Retry** and pick any other detected method from a dropdown.
 
 ### ⌨️ Quick Review mode
-Keyboard shortcuts are always available: use `1`–`4` to switch between Pending, Kept, Unsubscribed, and Errors; the arrow keys (or `h`/`j`/`k`/`l`) to move; `S` to run a full scan; and `q` to toggle Quick Review. Card actions follow the active list: Pending uses `u` to unsubscribe, `i` to keep, `v` to view, and `x` to mark as spam; Kept uses `v` to view, `c` to clean up, and `r` to review again; Unsubscribed and Errors add `u` to retry unsubscribe and `x` to dismiss. Without Quick Review, `u` opens the normal confirmation dialog. Quick Review adds multi-select and applies your saved cleanup default without opening that dialog for every sender. In modals, Escape cancels and Enter submits. **Leave emails** and **Delete emails** can be queued immediately.
+Press `?` at any time outside an input to see the shortcut guide. Use `1`–`4` to switch between Pending, Kept, Unsubscribed, and Errors; the arrow keys (or `h`/`j`/`k`/`l`) to move; `g`/`G` for the first/last card; `S` for a full scan; `C` to clear finished activity; and `q` to toggle Quick Review. In modals, Enter submits and Escape cancels.
+
+Card actions change with the active list: Pending uses `u` to unsubscribe, `i` to keep, `v` to view, and `x` to mark as spam; Kept uses `v` to view, `c` to clean up, and `r` to review again; Unsubscribed and Errors use `u` to retry, `v` to view, `c` to clean up, `r` to review again, and `x` to dismiss.
+
+Quick Review adds multi-select with `Space`. Actions always apply to the selection first and fall back to the focused card when nothing is selected. The contextual action bar exposes the same batch actions as the keyboard. Instant unsubscribe and batch cleanup use your saved cleanup default without reopening the confirmation dialog for every sender.
 
 When **Move emails** is the saved cleanup default, use the adjacent gear to choose a destination folder for each Thunderbird identity. Quick Review can move a single subscription immediately when its identity is configured; batch unsubscribe starts only when every selected identity has a valid saved destination.
 
@@ -79,6 +85,7 @@ Want to explore risk-free first? Flip the **Dry Run** toggle and every unsubscri
 - Failed unsubscribes land in an **Errors** tab with the reason — nothing silently disappears.
 - **View** any subscription to open its emails right in Thunderbird, pre-filtered by sender.
 - Rescans **preserve your decisions**: senders you kept or unsubscribed stay that way; new senders show up as pending.
+- Unsubscribe and cleanup work is queued in a visible **Activity** feed with progress, error details, cancellation, retry context, and a shortcut to clear finished items.
 
 ### 🔒 Private by design
 - All data lives in Thunderbird's local extension storage. **Nothing is uploaded, ever.**
@@ -90,18 +97,7 @@ Want to explore risk-free first? Flip the **Dry Run** toggle and every unsubscri
 
 ThunderSub requires **Thunderbird 128 or later**.
 
-ThunderSub **has not yet completed review**. Its
-[Thunderbird add-on details page](https://addons.thunderbird.net/en-US/thunderbird/addon/thundersub/)
-can be accessed directly, but it is not yet listed in the add-on gallery and cannot be found through
-Thunderbird's add-on search. For now, install it manually from the `.xpi` file:
-
-1. Open the [ThunderSub add-on listing](https://addons.thunderbird.net/en-US/thunderbird/addon/thundersub/) and download the `.xpi` file.
-2. In Thunderbird, open the **≡ menu** and select **Add-ons and Themes**.
-3. Select the **settings gear icon**, then **Install Add-on From File…**.
-4. Pick the downloaded `.xpi` file and confirm the installation.
-
-Because review is not yet complete, new versions may also need to be downloaded and installed
-manually.
+Install ThunderSub from its official [Thunderbird Add-ons listing](https://addons.thunderbird.net/en-US/thunderbird/addon/thundersub/), or search for **ThunderSub** in Thunderbird's **Add-ons and Themes** manager.
 
 ### Install from source
 
@@ -162,11 +158,15 @@ tab/             The main dashboard UI
 icons/           SVG icons
 ```
 
-No build step, no dependencies, no framework — plain JavaScript on the [Thunderbird WebExtension APIs](https://webextension-api.thunderbird.net/).
+No framework or runtime dependencies—just plain JavaScript on the [Thunderbird WebExtension APIs](https://webextension-api.thunderbird.net/). `bash build.sh` packages the source into an XPI. Node.js is used only for the development test suite (`npm test`).
+
+For an isolated manual test environment, run `bash test-inbox.sh`. It launches Thunderbird with a disposable profile containing multiple fictional inboxes, identities, aliases, and deterministic newsletter traffic; the two original unsubscribe-reproduction messages remain in Local Folders.
 
 ## Contributing
 
-Bug reports and pull requests are welcome. Useful context for hacking:
+Bug reports and pull requests are welcome through [GitHub Issues](https://github.com/SmarakNayak/thundersub/issues). Include the action that failed, the affected account/folder type, and ThunderSub logs from Thunderbird's Error Console (`Ctrl+Shift+J`, filter for `ThunderSub`) when reporting a hung or failed job.
+
+Useful context for hacking:
 
 - Subscriptions are keyed by `senderEmail|recipientAddress|accountIdentityAddress` and stored via `browser.storage.local`.
 - Message references are stored as RFC 5322 Message-IDs and re-resolved to live message ids before any delete/move, because Thunderbird's numeric ids don't survive restarts.

@@ -1325,7 +1325,9 @@ async function runScan() {
 async function unsubOneClick(url, traceId) {
   const startedAt = Date.now();
   const localTestEndpoint = ALLOW_LOOPBACK_HTTP_FOR_TESTING &&
-    (url === 'http://127.0.0.1:8765/fail' || url === 'http://127.0.0.1:8765/success');
+    (url === 'http://127.0.0.1:8765/fail' ||
+      url === 'http://127.0.0.1:8765/fail-json' ||
+      url === 'http://127.0.0.1:8765/success');
   const blockReason = localTestEndpoint ? null : oneClickUrlBlockReason(url);
   if (blockReason) {
     tracePhase(traceId, 'one-click-blocked', startedAt, { reason: blockReason });
@@ -1336,8 +1338,14 @@ async function unsubOneClick(url, traceId) {
     headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
     body: 'List-Unsubscribe=One-Click'
   });
+  const message = resp.ok ? '' : (await resp.text()).trim();
   tracePhase(traceId, 'one-click-fetch', startedAt, { status: resp.status, ok: resp.ok });
-  return { ok: resp.ok, status: resp.status };
+  return {
+    ok: resp.ok,
+    status: resp.status,
+    statusText: resp.statusText,
+    message
+  };
 }
 
 async function unsubMail(mailtoUrl, recipientAddress, traceId) {

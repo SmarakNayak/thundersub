@@ -201,7 +201,9 @@ function renderActivityQueue() {
             'aria-label': 'Dismiss activity item',
             'data-job-id': job.id
           }, 'x'))),
-      el('div', { class: 'activity-detail', title: job.message || '' }, job.message || 'Waiting...'),
+      el('div', {
+        class: 'activity-detail', title: job.responseMessage || job.message || ''
+      }, job.message || 'Waiting...'),
       (job.status === 'queued' || job.status === 'running') && el('div', { class: 'activity-progress-track' },
         el('div', { class: 'activity-progress-bar', style: `width:${Math.max(0, Math.min(100, job.progress || 0))}%` })));
   }));
@@ -335,6 +337,9 @@ function activityDetailRows(job) {
     ['Messages', String(job.selectedMessages || 0)],
     ['Folders', folderText],
   ].filter(Boolean);
+  if (Number.isFinite(job.httpStatus)) rows.push(['HTTP status', String(job.httpStatus)]);
+  if (job.httpStatusText) rows.push(['HTTP status text', job.httpStatusText]);
+  if (job.responseMessage) rows.push(['Response body', job.responseMessage]);
   if (job.destination) rows.push(['Destination', job.destination.label || job.destination.folderName || job.destination.id]);
   return rows;
 }
@@ -1867,7 +1872,9 @@ function buildCard(s) {
         el('span', {}, accountNames.join(', '))),
       s.recipientAddress && el('div', { class: 'card-accounts', title: `Delivered to ${s.recipientAddress}` }, `→ ${s.recipientAddress}`),
       s.sampleSubject && el('div', { class: 'card-subject', title: s.sampleSubject }, `"${s.sampleSubject.substring(0, 80)}"`),
-      s.error?.message && el('div', { class: 'card-error', title: s.error.message }, `${s.error.stage || 'Error'}: ${s.error.message}`),
+      s.error?.message && el('div', {
+        class: 'card-error', title: s.error.responseMessage || s.error.message
+      }, `${s.error.stage || 'Error'}: ${s.error.message}`),
       quickReviewDescription && (s.decision === 'pending' || s.decision === 'unsubscribed' || s.decision === 'error') &&
         el('div', { class: 'quick-review-action-note', title: quickReviewDescription.title }, quickReviewDescription.text),
       SHOW_DETECTION_UI && el('button', { class: 'evidence-toggle js-evidence-toggle', type: 'button' }, 'Why detected?')),
@@ -2547,8 +2554,23 @@ function dryRunSummary(sub, method, dispose, selectedFolders, destination, mode 
   return `${summary}. No changes made.`;
 }
 
-function errorPayload(stage, message) {
-  return { stage, message: String(message || 'Unknown error'), at: new Date().toISOString() };
+function errorPayload(stage, message, details = {}) {
+  return { stage, message: String(message || 'Unknown error'), ...details, at: new Date().toISOString() };
+}
+
+function unsubscribeFailureMessage(method, result, error) {
+  if (!method) return 'No unsubscribe method is available';
+  const label = METHOD_LABELS[method.type] || method.type || 'unsubscribe';
+  if (error) {
+    const reason = String(error.message || error).replace(/\s+/g, ' ').trim();
+    return `${label} unsubscribe failed${reason ? `: ${reason}` : ''}`;
+  }
+  if (Number.isFinite(result?.status)) {
+    const status = `HTTP ${result.status}${result.statusText ? ` ${result.statusText}` : ''}`;
+    const reason = String(result.message || '').trim();
+    return `${label} unsubscribe failed: ${status}${reason ? ` — ${reason}` : ''}`;
+  }
+  return `${label} unsubscribe failed without a response`;
 }
 
 async function doUnsubscribeConfirm() {
@@ -2646,6 +2668,7 @@ async function processActivityJob(job) {
   // Fire unsubscribe
   let ok = false;
   let unsubscribeResult = null;
+  let unsubscribeError = null;
   if (job.mode === 'cleanup' || job.mode === 'keep-cleanup') {
     ok = true;
     setActivityJobProgress(job, 'Applying cleanup...', 10);
@@ -2669,20 +2692,29 @@ async function processActivityJob(job) {
         ok = true;
       }
     } catch (e) {
+      unsubscribeError = e;
       ok = false;
     }
   }
 
   if (!ok) {
-    const message = method ? 'Unsubscribe request failed' : 'No unsubscribe method is available';
+    const message = unsubscribeFailureMessage(method, unsubscribeResult, unsubscribeError);
+    const responseDetails = unsubscribeResult ? {
+      httpStatus: unsubscribeResult.status,
+      httpStatusText: unsubscribeResult.statusText || '',
+      responseMessage: unsubscribeResult.message || ''
+    } : {};
+    Object.assign(job, responseDetails);
+    const error = errorPayload('unsubscribe', message, responseDetails);
     await trace.bg('decide', {
       ...jobRequest,
       decision: 'error',
       dispose,
-      error: errorPayload('unsubscribe', message)
+      error
     });
     updateDecisionStats(sub.decision, 'error');
     sub.decision = 'error';
+    sub.error = error;
     sub.processing = false;
     toast(message, 'error');
     if (currentFilter === 'error') renderFilteredCards();
