@@ -55,3 +55,17 @@ Content-Type: text/plain; charset=utf-8
 
 Synthetic newsletter whose unsubscribe returns HTTP 422 Unprocessable Content
 with a structured JSON error response.
+
+From - Thu Aug 20 09:04:00 2026
+From: Email Error Subscription <email-errors@queue-repro.invalid>
+To: ThunderSub Tester <tester@thundersub.invalid>
+Subject: Email unsubscribe failure reproduction
+Date: Thu, 20 Aug 2026 09:04:00 +1000
+Message-ID: <email-error-details@queue-repro.invalid>
+List-ID: Email Error Subscription <email-errors.queue-repro.invalid>
+List-Unsubscribe: <mailto:unsubscribe@queue-repro.invalid?subject=unsubscribe>
+MIME-Version: 1.0
+Content-Type: text/plain; charset=utf-8
+
+Synthetic mailto subscription. With Auto-send disabled it opens a draft. Enable
+Auto-send to exercise Thunderbird's send-failure details in the offline profile.

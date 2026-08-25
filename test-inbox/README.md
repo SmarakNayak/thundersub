@@ -14,7 +14,10 @@ third `Error Subscription` message targets the same failure endpoint so the
 error card and Activity details can be checked for HTTP status, status text, and
 the complete plaintext response message. A fourth `JSON Error Subscription`
 targets `/fail-json` and returns HTTP 422 Unprocessable Content with a structured
-JSON body so non-plaintext diagnostics can be checked without losing fields.
+JSON body so non-plaintext diagnostics can be checked without losing fields. A
+fifth `Email Error Subscription` uses a mailto unsubscribe method: leave
+Auto-send disabled to verify draft creation, or enable Auto-send to exercise the
+offline profile's email-send failure details.
 
 The committed profile also contains Personal and Work inboxes with ten more
 subscriptions and 83 emails, ranging from 1 to 20 messages per subscription.

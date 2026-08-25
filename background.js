@@ -1383,7 +1383,12 @@ async function unsubMail(mailtoUrl, recipientAddress, traceId) {
   const details = { to, subject, body };
   if (identityId) details.identityId = identityId;
 
-  const composeTab = await browser.compose.beginNew(details);
+  let composeTab;
+  try {
+    composeTab = await browser.compose.beginNew(details);
+  } catch (error) {
+    throw new Error(`Failed to create unsubscribe email draft: ${error.message || error}`);
+  }
   const autoSend = await getAutoSendUnsubscribeEmails();
   // Without an identity matching the subscribed address, sending as-is
   // would disclose a different address of the user's to the sender. Always
@@ -1399,10 +1404,15 @@ async function unsubMail(mailtoUrl, recipientAddress, traceId) {
     return { ok: true, to, drafted: true };
   }
 
-  const result = await browser.compose.sendMessage(composeTab.id, { mode: 'sendNow' });
+  let result;
+  try {
+    result = await browser.compose.sendMessage(composeTab.id, { mode: 'sendNow' });
+  } catch (error) {
+    throw new Error(`Failed to send unsubscribe email: ${error.message || error}`);
+  }
 
   if (!result || typeof result.headerMessageId === 'undefined') {
-    throw new Error('Failed to send unsubscribe email');
+    throw new Error('Failed to send unsubscribe email: Thunderbird did not confirm that the message was sent');
   }
   tracePhase(traceId, 'mailto-compose-send', startedAt);
   return { ok: true, to, sent: true };
