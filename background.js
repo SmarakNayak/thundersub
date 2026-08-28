@@ -1335,10 +1335,12 @@ async function unsubOneClick(url, traceId) {
   }
   const resp = await fetch(url, {
     method: 'POST',
+    redirect: 'error',
+    credentials: 'omit',
     headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
     body: 'List-Unsubscribe=One-Click'
   });
-  const message = resp.ok ? '' : (await resp.text()).trim();
+  const message = resp.ok ? '' : await limitedResponseText(resp, 1000);
   tracePhase(traceId, 'one-click-fetch', startedAt, { status: resp.status, ok: resp.ok });
   return {
     ok: resp.ok,
@@ -1346,6 +1348,29 @@ async function unsubOneClick(url, traceId) {
     statusText: resp.statusText,
     message
   };
+}
+
+async function limitedResponseText(resp, maxLength) {
+  const truncatedSuffix = '… [response truncated]';
+  const reader = resp.body?.getReader();
+  if (!reader) return '';
+
+  const decoder = new TextDecoder();
+  let text = '';
+  while (text.length <= maxLength) {
+    const { value, done } = await reader.read();
+    if (done) {
+      text += decoder.decode();
+      break;
+    }
+    text += decoder.decode(value, { stream: true });
+  }
+
+  if (text.length > maxLength) {
+    await reader.cancel();
+    return text.slice(0, maxLength - truncatedSuffix.length) + truncatedSuffix;
+  }
+  return text.trim();
 }
 
 async function unsubMail(mailtoUrl, recipientAddress, traceId) {
@@ -1861,7 +1886,7 @@ async function viewSubscription(key, senderEmail) {
 }
 
 // ── Message handler ──────────────────────────────────────────────────────────
-function handleRuntimeMessage(request, sender) {
+export function handleRuntimeMessage(request, sender) {
   const requestKey = keyFromRequest(request);
   switch (request.command) {
     case 'scan':
