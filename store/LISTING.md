@@ -129,12 +129,13 @@ They show the real tab UI (unmodified `tab/tab.html`/`tab.css`/`tab.js`) rendere
 demo data (`.example` senders, `alex@example.net` recipient) — regenerate any time with
 `bash store/screenshots/make.sh` (needs chromium or nix).
 
-## Release notes (1.1.0)
+## Release notes (1.1.1)
 
 ```
-Version 1.1.0 — Quick Review and workflow update.
+Version 1.1.1 — Quick Review and workflow update.
 
 • Added keyboard-first navigation and contextual shortcuts across every review list.
+• Added a floating keyboard-shortcut reference that stays available while reviewing.
 • Added Quick Review multi-select with matching contextual batch-action buttons.
 • Added instant unsubscribe and batch cleanup using the saved cleanup default.
 • Added per-identity move destinations, including folder creation.

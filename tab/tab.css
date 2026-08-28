@@ -167,7 +167,7 @@ body{display:flex;overflow:hidden}
 .quick-review-actions{display:flex;gap:6px;flex-wrap:wrap}
 .quick-review-actions button[hidden]{display:none}
 kbd{padding:1px 5px;border:1px solid var(--border);border-bottom-width:2px;border-radius:4px;background:var(--card);color:var(--text);font:11px monospace}
-#shortcut-help{display:none;margin:-8px 0 18px;padding:10px 12px;border:1px solid var(--border);border-radius:8px;color:var(--muted);font-size:12px;line-height:1.6}
+#shortcut-help{display:none;position:fixed;left:304px;bottom:52px;z-index:90;width:max-content;max-width:calc(100vw - 328px);padding:10px 12px;border:1px solid var(--border);border-radius:8px;background:var(--card);box-shadow:0 8px 24px rgba(0,0,0,.34);color:var(--muted);font-size:12px;line-height:1.6;white-space:nowrap}
 #shortcut-help.open{display:flex;flex-direction:column;gap:4px}
 .list-controls{display:flex;align-items:flex-end;justify-content:flex-end;gap:10px;flex-wrap:wrap}
 .list-control{display:flex;flex-direction:column;gap:4px;color:var(--muted);font-size:11px;font-weight:600}
