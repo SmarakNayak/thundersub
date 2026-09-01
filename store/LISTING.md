@@ -150,6 +150,8 @@ Compatible with Thunderbird 128 and later.
 ## Notes to reviewers (paste into "Notes to Reviewer" on upload)
 
 ```
+Version 1.1.1 supersedes the unpublished 1.1.0 version. Version 1.1.0 was never submitted to or distributed through addons.thunderbird.net. Please review 1.1.1 as the next public update.
+
 Source is plain, unminified JavaScript with no third-party runtime libraries. build.sh performs deterministic XPI packaging; the uploaded XPI contains the readable source (repo: https://github.com/SmarakNayak/thundersub).
 
 The background runs as an ES module via a background page (background.html): background.js imports the localized unsubscribe-wording list from unsub-detect.js (embedded unsubscribe links in 13 languages), the sender skip-pattern matcher from scan-scope.js, the unsubscribe URL safety gates from unsub-url.js, and account-ID-based junk-folder routing from junk-routing.js. All matching is local regex matching; no translation service or network involvement.
@@ -165,7 +167,7 @@ Permission justifications:
 - storage: persist scan results and user decisions locally.
 - <all_urls>: RFC 8058 one-click unsubscribe requires a POST (fetch) to whatever HTTPS endpoint the sender's List-Unsubscribe header specifies, which cannot be known in advance. Requests are only made when the user clicks Unsubscribe. One-click URLs are limited to public HTTPS endpoints; browser-opened unsubscribe links may use HTTP or HTTPS. Both refuse localhost, private/reserved IP ranges, and internal hostnames (unsub-url.js).
 
-No remote code is loaded or executed. The UI never uses innerHTML: all rendering goes through a createElement/textContent element builder (el() in tab/tab.js), so strings from emails can only become text nodes and are never parsed as HTML. No user data leaves the machine.
+No remote code is loaded or executed. The UI never uses innerHTML: all rendering goes through a createElement/textContent element builder (el() in tab/tab.js), so strings from emails can only become text nodes and are never parsed as HTML. Network requests occur only when the user initiates an unsubscribe action.
 
 Testing tip: click the toolbar button -> "Open ThunderSub" -> "Scan Emails" against any profile with newsletter mail. Enabling the "Dry Run" toggle in the sidebar makes every action simulated and reported via toasts instead of executed. The repository also includes test-inbox.sh, which launches a disposable Thunderbird profile with deterministic fictional subscriptions across multiple inboxes, identities, and aliases.
 ```
