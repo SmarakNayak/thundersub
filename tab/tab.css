@@ -34,6 +34,9 @@ body{display:flex;overflow:hidden}
 }
 #scan-btn:hover{opacity:.85}
 #scan-btn:disabled{opacity:.5;cursor:not-allowed}
+.scan-startup{display:flex;align-items:center;justify-content:center;gap:6px;margin-top:8px;font-size:11px;color:var(--muted);cursor:pointer}
+.scan-startup:hover{color:var(--text)}
+.scan-startup input{margin:0;cursor:pointer}
 .scan-last{font-size:11px;color:var(--muted);margin-top:6px;text-align:center}
 .scan-last:empty{display:none}
 .scan-scope-btn{display:block;width:100%;margin-top:6px;padding:0 0 3px;border:none;background:none;color:var(--muted);font-size:11px;font-family:var(--font);cursor:pointer;text-align:center;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;text-decoration:underline dotted;text-decoration-thickness:1px;text-underline-offset:3px}
@@ -123,6 +126,7 @@ body{display:flex;overflow:hidden}
 }
 .filter-tab.active .filter-badge{background:rgba(99,102,241,.25);color:var(--accent)}
 #fb-error.has-errors{background:rgba(239,68,68,.16);color:#fca5a5}
+#fb-needs_input.has-input{background:rgba(245,158,11,.18);color:#fcd34d}
 .filter-tab.active #fb-error.has-errors{background:rgba(239,68,68,.24);color:#fecaca}
 
 .activity-section{display:none;position:fixed;right:20px;bottom:20px;width:340px;max-width:calc(100vw - 40px);padding:12px;border:1px solid var(--border);border-radius:10px;background:var(--sidebar);box-shadow:0 10px 32px rgba(0,0,0,.42);z-index:8500}
@@ -223,6 +227,7 @@ kbd{padding:1px 5px;border:1px solid var(--border);border-bottom-width:2px;borde
 .badge-unsub{background:rgba(239,68,68,.15);color:#f87171}
 .badge-neutral{background:rgba(107,114,128,.18);color:#cbd5e1}
 .badge-error{background:rgba(239,68,68,.2);color:#fecaca}
+.badge-input{background:rgba(245,158,11,.2);color:#fde68a}
 .badge-processing{background:rgba(59,130,246,.15);color:#93c5fd}
 .card-meta{font-size:12px;color:var(--muted);margin-bottom:8px;display:flex;gap:12px;flex-wrap:wrap}
 .card-subject{

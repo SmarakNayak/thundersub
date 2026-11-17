@@ -9,6 +9,7 @@
 import { UNSUB_REGEX, mayContainUnsubWording } from './unsub-detect.js';
 import { buildAddressSkipMatcher } from './scan-scope.js';
 import { oneClickUrlBlockReason, browserUrlBlockReason } from './unsub-url.js';
+import { classifyUnsubPageText } from './unsub-page.js';
 import { junkFolderForGroup } from './junk-routing.js';
 
 // ── State ────────────────────────────────────────────────────────────────────
@@ -180,6 +181,17 @@ async function setDryRun(dryRun) {
   return { dryRun: enabled };
 }
 
+async function getScanOnStartup() {
+  const result = await browser.storage.local.get('scanOnStartup');
+  return result.scanOnStartup === true;
+}
+
+async function setScanOnStartup(scanOnStartup) {
+  const enabled = scanOnStartup === true;
+  await browser.storage.local.set({ scanOnStartup: enabled });
+  return { scanOnStartup: enabled };
+}
+
 async function getAutoSendUnsubscribeEmails() {
   const result = await browser.storage.local.get('autoSendUnsubscribeEmails');
   return result.autoSendUnsubscribeEmails === true;
@@ -189,6 +201,33 @@ async function setAutoSendUnsubscribeEmails(autoSendUnsubscribeEmails) {
   const enabled = autoSendUnsubscribeEmails === true;
   await browser.storage.local.set({ autoSendUnsubscribeEmails: enabled });
   return { autoSendUnsubscribeEmails: enabled };
+}
+
+// Close an unsubscribe tab once its page confirms the unsubscribe. On unless
+// switched off. (New storage key: an older, differently-behaving setting may
+// have been stored as false.)
+async function getAutoCloseConfirmedTabs() {
+  const result = await browser.storage.local.get('autoCloseConfirmedTabs');
+  return result.autoCloseConfirmedTabs !== false;
+}
+
+async function setAutoCloseConfirmedTabs(autoCloseConfirmedTabs) {
+  const enabled = autoCloseConfirmedTabs === true;
+  await browser.storage.local.set({ autoCloseConfirmedTabs: enabled });
+  return { autoCloseConfirmedTabs: enabled };
+}
+
+// Type the subscription's own address into a simple unsubscribe form and
+// submit it. Off unless the person turns it on.
+async function getAutoFillUnsubEmail() {
+  const result = await browser.storage.local.get('autoFillUnsubEmail');
+  return result.autoFillUnsubEmail === true;
+}
+
+async function setAutoFillUnsubEmail(autoFillUnsubEmail) {
+  const enabled = autoFillUnsubEmail === true;
+  await browser.storage.local.set({ autoFillUnsubEmail: enabled });
+  return { autoFillUnsubEmail: enabled };
 }
 
 function normalizeDefaultUnsubscribeDispose(value) {
@@ -239,7 +278,13 @@ async function setMoveDestinationsByIdentity(moveDestinationsByIdentity) {
 }
 
 async function getQuickReviewMode() {
-  const result = await browser.storage.local.get('quickReviewMode');
+  const result = await browser.storage.local.get(['quickReviewMode', 'quickReviewOnByDefault']);
+  if (!result.quickReviewOnByDefault) {
+    // One-time switch: Quick Review is now the default view. After this the
+    // person's own choice (including turning it off) is respected.
+    await browser.storage.local.set({ quickReviewMode: true, quickReviewOnByDefault: true });
+    return true;
+  }
   return result.quickReviewMode === true;
 }
 
@@ -1333,13 +1378,27 @@ async function unsubOneClick(url, traceId) {
     tracePhase(traceId, 'one-click-blocked', startedAt, { reason: blockReason });
     throw new Error(`Blocked unsafe one-click unsubscribe URL (${blockReason}) — retry with the web or email method instead.`);
   }
-  const resp = await fetch(url, {
-    method: 'POST',
-    redirect: 'error',
-    credentials: 'omit',
-    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-    body: 'List-Unsubscribe=One-Click'
-  });
+  const host = new URL(url).hostname;
+  let resp;
+  try {
+    // redirect: 'manual' still never follows a redirect, but lets us tell a
+    // redirect apart from a real network failure (both used to surface as the
+    // same "NetworkError when attempting to fetch resource").
+    resp = await fetch(url, {
+      method: 'POST',
+      redirect: 'manual',
+      credentials: 'omit',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: 'List-Unsubscribe=One-Click'
+    });
+  } catch (e) {
+    tracePhase(traceId, 'one-click-network-error', startedAt, { host, error: String(e?.message || e) });
+    throw new Error(`could not reach ${host} (network, DNS or certificate error). Try the web or email method instead.`);
+  }
+  if (resp.type === 'opaqueredirect') {
+    tracePhase(traceId, 'one-click-redirect', startedAt, { host });
+    throw new Error(`${host} answered with a redirect, which ThunderSub does not follow. The request was probably received, so the unsubscribe may have worked. Retry with the web method to confirm.`);
+  }
   const message = resp.ok ? '' : await limitedResponseText(resp, 1000);
   tracePhase(traceId, 'one-click-fetch', startedAt, { status: resp.status, ok: resp.ok });
   return {
@@ -1443,24 +1502,350 @@ async function unsubMail(mailtoUrl, recipientAddress, traceId) {
   return { ok: true, to, sent: true };
 }
 
-async function openUnsubInBrowser(url, phase, traceId) {
+async function openUnsubInBrowser(url, phase, traceId, options = {}) {
   const startedAt = Date.now();
   const blockReason = browserUrlBlockReason(url);
   if (blockReason) {
     tracePhase(traceId, `${phase}-blocked`, startedAt, { reason: blockReason });
     throw new Error(`Blocked unsafe unsubscribe link (${blockReason}).`);
   }
+  // Always use a Thunderbird tab: only there can the page be read and
+  // verified. The default browser cannot be inspected, so it would report
+  // success for pages that still need input.
+  const autoCheck = true;
+  const [autoClose, autoFill] = await Promise.all([getAutoCloseConfirmedTabs(), getAutoFillUnsubEmail()]);
+  const fillEmail = autoFill ? String(options.email || '').trim() : '';
+  console.log(`ThunderSub: opening unsubscribe page for ${new URL(url).hostname} (auto-close/check: ${autoCheck ? 'on' : 'off'})`, traceId || '');
+  if (autoCheck) {
+    // Thunderbird cannot close tabs in the system browser, so when auto-close
+    // is on the page opens in a Thunderbird tab that we can close ourselves.
+    // Remember the tab the user is on: some Thunderbird versions ignore
+    // active:false for new tabs, so focus is handed back explicitly.
+    let previousTabId = null;
+    try {
+      const [current] = await withTimeout(
+        browser.tabs.query({ active: true, currentWindow: true }), 5000, 'tabs.query');
+      previousTabId = current?.id ?? null;
+    } catch (e) { /* best effort */ }
+    console.log('ThunderSub: stage 1/3 opening unsubscribe tab', traceId || '');
+    let tab;
+    try {
+      tab = await withTimeout(browser.tabs.create({ url, active: false }), UNSUB_TAB_OPEN_TIMEOUT_MS, 'Opening the unsubscribe tab');
+    } catch (e) {
+      tracePhase(traceId, `${phase}-tab-open-failed`, startedAt, { error: String(e?.message || e) });
+      throw new Error(`${e.message}. Thunderbird did not open the page for ${new URL(url).hostname}; nothing was deleted or moved.`);
+    }
+    if (previousTabId !== null && previousTabId !== tab.id) {
+      try { await withTimeout(browser.tabs.update(previousTabId, { active: true }), 5000, 'tabs.update'); }
+      catch (e) { console.warn('ThunderSub: could not restore the previous tab', e); }
+    }
+    console.log(`ThunderSub: stage 2/3 watching tab ${tab.id}`, traceId || '');
+    let verdict;
+    try {
+      verdict = await withTimeout(watchUnsubTab(tab.id, traceId, url, { autoClose, fillEmail }),
+        UNSUB_TAB_VERDICT_MAX_MS + 15000, 'Checking the unsubscribe page');
+    } catch (e) {
+      verdict = { result: 'unclear', host: new URL(url).hostname };
+    }
+    console.log(`ThunderSub: stage 3/3 verdict ${verdict.result}`, traceId || '');
+    tracePhase(traceId, `${phase}-thunderbird-tab`, startedAt, { verdict: verdict.result });
+    if (verdict.result === 'action') {
+      // Not a failure: the page is waiting for the user. Report it as its own
+      // outcome so the UI files it under "Needs input" rather than "Errors".
+      return {
+        ok: false,
+        needsInput: true,
+        host: verdict.host || '',
+        message: `the page for ${verdict.host || 'this sender'} needs more from you (for example your email address or a confirmation click). ${
+          verdict.autoFilled ? 'ThunderSub entered your address and submitted the form, but the page still needs input. '
+            : (verdict.fillNote ? `ThunderSub did not fill it in automatically (${verdict.fillNote}). ` : '')
+        }The tab was left open; nothing was deleted or moved.`
+      };
+    }
+    if (verdict.result === 'unreachable') {
+      throw new Error(`${verdict.host || 'the unsubscribe site'} could not be reached or its page could not be read (the address was not found or the connection failed). The tab was left open; nothing was deleted or moved.`);
+    }
+    if (verdict.result === 'blank') {
+      throw new Error(`the page for ${verdict.host || 'this sender'} loaded but showed nothing, so ThunderSub cannot tell whether the unsubscribe worked (the request may have been processed silently). The tab was left open; nothing was deleted or moved.`);
+    }
+    if (verdict.result === 'timeout') {
+      throw new Error(`the page for ${verdict.host || 'this sender'} did not finish loading within ${UNSUB_TAB_VERDICT_MAX_MS / 1000}s. The tab was left open so you can check; nothing was deleted or moved.`);
+    }
+    if (verdict.result === 'failed') {
+      throw new Error(`the page for ${verdict.host || 'this sender'} says it cannot unsubscribe you. The tab was left open; nothing was deleted or moved.`);
+    }
+    if (verdict.result === 'unclear') {
+      throw new Error(`could not confirm the unsubscribe on ${verdict.host || 'the page'}. The tab was left open so you can check; nothing was deleted or moved.`);
+    }
+    if (verdict.result === 'closed') {
+      throw new Error('the unsubscribe page was closed before it could be confirmed; nothing was deleted or moved.');
+    }
+    return { ok: true, confirmed: true, autoFilled: verdict.autoFilled === true };
+  }
   await browser.windows.openDefaultBrowser(url);
   tracePhase(traceId, phase, startedAt);
   return { ok: true };
 }
 
-async function unsubWeb(url, traceId) {
-  return openUnsubInBrowser(url, 'open-browser', traceId);
+// Watch an unsubscribe tab and report how its page reads. Once the page
+// loads, its visible text is classified (see unsub-page.js):
+//   confirmed -> the tab is closed shortly after and the unsubscribe counts
+//   action    -> page wants input or a click; tab stays open
+//   failed    -> page says it cannot unsubscribe you / shows an error; tab stays open
+//   unclear   -> nothing recognisable within the time cap; tab stays open
+//   closed    -> the tab was closed (by hand) before a verdict
+// Resolves with { result, host }. The caller treats anything but 'confirmed'
+// as a failed unsubscribe, so no cleanup runs for it.
+const UNSUB_TAB_RENDER_WAIT_MS = 2000;
+const UNSUB_TAB_RECHECK_MS = 3000;
+const UNSUB_TAB_CLOSE_DELAY_MS = 1500;
+const UNSUB_TAB_VERDICT_MAX_MS = 30000;
+const UNSUB_TAB_OPEN_TIMEOUT_MS = 20000;
+const UNSUB_TAB_READ_TIMEOUT_MS = 10000;
+const UNSUB_TAB_AFTER_FILL_WAIT_MS = 3000;
+const UNSUB_TAB_POST_FILL_CHECKS = 3;
+
+const READ_UNSUB_PAGE_CODE = `(() => {
+  const controls = [...document.querySelectorAll('button, input[type=submit], input[type=button], [role=button]')]
+    .map(el => el.innerText || el.value || '').join(' | ');
+  const hasTextInput = [...document.querySelectorAll('input')].some(el => {
+    const type = (el.type || 'text').toLowerCase();
+    if (!['text', 'email', 'search', 'tel'].includes(type)) return false;
+    const box = el.getBoundingClientRect();
+    return box.width > 0 && box.height > 0;
+  });
+  return { text: document.body ? document.body.innerText : '', controls, hasTextInput };
+})()`;
+
+// Firefox/Thunderbird show about:neterror (DNS failure, refused connection),
+// about:certerror and about:blocked instead of the page.
+function isBrowserErrorPage(url, title = '') {
+  if (/^about:(?:neterror|certerror|blocked)/i.test(String(url || ''))) return true;
+  // The tab's url can stay the address we asked for while the error page is
+  // showing, but its title changes to the error wording.
+  return /server not found|problem loading page|unable to connect|can(?:'|’)?t connect|secure connection failed|connection (?:was )?(?:reset|refused|timed out)|trouble finding that site|potential security risk/i
+    .test(String(title || ''));
 }
 
-async function unsubEmbedded(url, traceId) {
-  return openUnsubInBrowser(url, 'open-embedded-browser', traceId);
+// Script run inside the unsubscribe page (every frame) to fill and submit a
+// simple one-field email form. It refuses anything that is not plainly "type
+// your email, press the unsubscribe button": non-https pages, captchas,
+// passwords, several text boxes, surveys, checkboxes/radios, a box that is not
+// an email field, or no clearly-labelled submit button. Returns
+// { clicked: true } or { reason }.
+function buildFillUnsubFormCode(email) {
+  return `(() => {
+  const email = ${JSON.stringify(email)};
+  const unsubRe = new RegExp(${JSON.stringify(UNSUB_REGEX.source)}, ${JSON.stringify(UNSUB_REGEX.flags)});
+  const submitRe = /^(?:submit|send|confirm|continue|go|ok|okay|next|remove me|opt[- ]?out|stop emails?)(?![a-z])/i;
+  const visible = el => {
+    const box = el.getBoundingClientRect();
+    const style = getComputedStyle(el);
+    return box.width > 0 && box.height > 0 && style.visibility !== 'hidden' && style.display !== 'none';
+  };
+  const labelOf = el => String(el.innerText || el.value || el.getAttribute('aria-label') || el.alt || '').trim();
+  try {
+    if (location.protocol !== 'https:') return { reason: 'the page is not https' };
+    if (document.querySelector('.g-recaptcha, .h-captcha, .cf-turnstile, [data-sitekey], iframe[src*="recaptcha"], iframe[src*="hcaptcha"], iframe[src*="turnstile"]')) {
+      return { reason: 'the page has a captcha' };
+    }
+    const fields = [...document.querySelectorAll('input, textarea, select')].filter(visible);
+    if (fields.some(el => el.type === 'password')) return { reason: 'the page has a password box' };
+    if (fields.some(el => el.tagName === 'TEXTAREA' || el.tagName === 'SELECT')) return { reason: 'the page has extra fields' };
+    if (fields.some(el => el.type === 'checkbox' || el.type === 'radio')) return { reason: 'the page has checkboxes or options to choose' };
+    const typed = fields.filter(el => el.tagName === 'INPUT' && !el.readOnly && !el.disabled &&
+      ['text', 'email', 'search', 'tel', 'url', 'number'].includes((el.type || 'text').toLowerCase()));
+    if (typed.length === 0) return { reason: 'no text box was found' };
+    if (typed.length > 1) return { reason: 'the page has several text boxes' };
+    const box = typed[0];
+    const labels = box.labels ? [...box.labels].map(l => l.innerText).join(' ') : '';
+    const looksLikeEmail = (box.type || '').toLowerCase() === 'email' ||
+      /e-?mail/i.test([box.name, box.id, box.placeholder, box.getAttribute('aria-label') || '', box.autocomplete || '', labels].join(' '));
+    if (!looksLikeEmail) return { reason: 'the text box is not an email field' };
+    const existing = String(box.value || '').trim();
+    if (existing && existing.toLowerCase() !== email.toLowerCase()) return { reason: 'the email box is already filled in' };
+    const scope = box.form || box.closest('form') || document;
+    const buttons = [...scope.querySelectorAll('button, input[type=submit], input[type=button], input[type=image], [role=button]')]
+      .filter(el => visible(el) && !el.disabled);
+    const pick = buttons.find(el => unsubRe.test(labelOf(el))) ||
+      (buttons.filter(el => submitRe.test(labelOf(el))).length === 1 ? buttons.find(el => submitRe.test(labelOf(el))) : null);
+    if (!pick) return { reason: 'there is no clearly labelled submit button' };
+    const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set;
+    box.focus();
+    setter.call(box, email);
+    box.dispatchEvent(new Event('input', { bubbles: true }));
+    box.dispatchEvent(new Event('change', { bubbles: true }));
+    pick.click();
+    return { clicked: true };
+  } catch (e) {
+    return { reason: 'the form could not be filled in' };
+  }
+})()`;
+}
+
+async function tryFillUnsubForm(tabId, email) {
+  const frames = (await withTimeout(
+    browser.tabs.executeScript(tabId, { code: buildFillUnsubFormCode(email), allFrames: true }),
+    UNSUB_TAB_READ_TIMEOUT_MS, 'Filling in the unsubscribe form')).filter(Boolean);
+  if (frames.some(frame => frame.clicked === true)) return { clicked: true };
+  return { reason: frames.map(frame => frame.reason).filter(Boolean).pop() || 'no form was found' };
+}
+
+function watchUnsubTab(tabId, traceId, url, options = {}) {
+  let host = '';
+  try { host = new URL(url).hostname; } catch (e) { /* keep empty */ }
+  return new Promise((resolve) => {
+    let settled = false;
+    let checkTimer = null;
+    let readFailures = 0;
+    let blankReads = 0;
+    let checking = false;
+    let fillAttempted = false;
+    let autoFilled = false;
+    let fillNote = '';
+    let postFillChecks = 0;
+    const done = (result, closeTab) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(checkTimer);
+      clearTimeout(maxTimer);
+      browser.tabs.onUpdated.removeListener(onUpdated);
+      browser.tabs.onRemoved.removeListener(onRemoved);
+      if (closeTab) {
+        setTimeout(() => {
+          browser.tabs.remove(tabId)
+            .then(() => console.log(`ThunderSub: closed unsubscribe tab ${tabId}`, traceId || ''))
+            .catch(e => console.warn(`ThunderSub: could not close unsubscribe tab ${tabId}`, e));
+        }, UNSUB_TAB_CLOSE_DELAY_MS);
+      }
+      resolve({ result, host, autoFilled, fillNote });
+    };
+    const check = async () => {
+      checkTimer = null;
+      if (settled || checking) return;
+      checking = true;
+      let result = 'unclear';
+      try {
+        // allFrames: many unsubscribe forms live inside an iframe, which a
+        // top-frame-only read would miss and report as "unclear".
+        const frames = (await withTimeout(
+          browser.tabs.executeScript(tabId, { code: READ_UNSUB_PAGE_CODE, allFrames: true }),
+          UNSUB_TAB_READ_TIMEOUT_MS, 'Reading the unsubscribe page')).filter(Boolean);
+        const data = {
+          text: frames.map(frame => frame.text || '').join('\n'),
+          controls: frames.map(frame => frame.controls || '').join(' | '),
+          hasTextInput: frames.some(frame => frame.hasTextInput === true)
+        };
+        result = classifyUnsubPageText(data?.text, data?.controls, data?.hasTextInput === true);
+        readFailures = 0;
+        // A page that loads but shows nothing at all (an empty response, a
+        // silent tracking redirect) is reported as such after two looks.
+        blankReads = (!data.text.trim() && !data.controls.trim()) ? blankReads + 1 : 0;
+      } catch (e) {
+        console.warn('ThunderSub: could not read unsubscribe page', e);
+        // Browser error pages ("server not found") cannot be scripted. A page
+        // that is simply still loading is not a failure, so only reads that
+        // fail after loading has finished count.
+        try {
+          const tab = await browser.tabs.get(tabId);
+          if (isBrowserErrorPage(tab?.url, tab?.title)) { done('unreachable', false); return; }
+          if (tab?.status === 'complete') readFailures++;
+        } catch (err) { /* tab may be gone */ }
+      }
+      checking = false;
+      if (settled) return;
+      // Scripts cannot run on browser error pages. Two failed reads in a row
+      // after the tab finished loading means the page never really loaded.
+      if (readFailures >= 2 && result === 'unclear') { done('unreachable', false); return; }
+      if (blankReads >= 2 && result === 'unclear') { done('blank', false); return; }
+      console.log(`ThunderSub: unsubscribe page ${host} classified as ${result}`, traceId || '');
+      if (result === 'action' && options.fillEmail && !fillAttempted) {
+        // The page wants an email address: type this subscription's own
+        // address into a simple form and submit it, once.
+        fillAttempted = true;
+        checking = true;
+        let outcome;
+        try {
+          outcome = await tryFillUnsubForm(tabId, options.fillEmail);
+        } catch (e) {
+          outcome = { reason: 'the form could not be read' };
+        }
+        checking = false;
+        if (settled) return;
+        if (outcome.clicked) {
+          autoFilled = true;
+          console.log(`ThunderSub: entered the address and submitted the form on ${host}`, traceId || '');
+          checkTimer = setTimeout(check, UNSUB_TAB_AFTER_FILL_WAIT_MS);
+          return;
+        }
+        fillNote = outcome.reason || '';
+        console.log(`ThunderSub: did not auto-fill ${host}: ${fillNote}`, traceId || '');
+      }
+      if (autoFilled && result === 'action' && postFillChecks < UNSUB_TAB_POST_FILL_CHECKS) {
+        // The submit may still be loading the next page; look again before
+        // concluding the page still needs input.
+        postFillChecks++;
+        checkTimer = setTimeout(check, UNSUB_TAB_AFTER_FILL_WAIT_MS);
+        return;
+      }
+      if (result === 'confirmed') done('confirmed', options.autoClose !== false);
+      else if (result === 'action' || result === 'failed') done(result, false);
+      else checkTimer = setTimeout(check, UNSUB_TAB_RECHECK_MS);
+    };
+    const onUpdated = (id, changeInfo, tab) => {
+      if (id !== tabId) return;
+      if (isBrowserErrorPage(changeInfo.url || tab?.url, changeInfo.title || tab?.title)) { done('unreachable', false); return; }
+      if (changeInfo.status !== 'complete') return;
+      // The moment loading ends, look at the tab's title: an error page can be
+      // recognised right away instead of waiting out the render delay below.
+      browser.tabs.get(tabId)
+        .then(current => { if (isBrowserErrorPage(current?.url, current?.title)) done('unreachable', false); })
+        .catch(() => {});
+      clearTimeout(checkTimer);
+      checkTimer = setTimeout(check, UNSUB_TAB_RENDER_WAIT_MS);
+    };
+    const onRemoved = (id) => {
+      if (id === tabId) done('closed', false);
+    };
+    const maxTimer = setTimeout(async () => {
+      // Distinguish a page that never finished loading from one we could not
+      // make sense of.
+      let result = 'unclear';
+      try {
+        const tab = await browser.tabs.get(tabId);
+        if (tab?.status && tab.status !== 'complete') result = 'timeout';
+      } catch (e) { /* tab may be gone */ }
+      done(result, false);
+    }, UNSUB_TAB_VERDICT_MAX_MS);
+    browser.tabs.onUpdated.addListener(onUpdated);
+    browser.tabs.onRemoved.addListener(onRemoved);
+
+    // Thunderbird can finish loading (or show an error page) before this
+    // listener exists, in which case the 'complete' event is never seen and
+    // the job would sit until the time limit. Look at the tab's current state
+    // now, and keep polling the load state until we get a verdict.
+    const sync = async () => {
+      if (settled) return;
+      try {
+        const current = await browser.tabs.get(tabId);
+        if (settled) return;
+        if (isBrowserErrorPage(current?.url, current?.title)) { done('unreachable', false); return; }
+        if (current?.status === 'complete' && !checkTimer) {
+          checkTimer = setTimeout(check, UNSUB_TAB_RENDER_WAIT_MS);
+        }
+      } catch (e) { /* tab may be gone; onRemoved reports it */ }
+      if (!settled) setTimeout(sync, 1000);
+    };
+    sync();
+  });
+}
+
+async function unsubWeb(url, traceId, email) {
+  return openUnsubInBrowser(url, 'open-browser', traceId, { email });
+}
+
+async function unsubEmbedded(url, traceId, email) {
+  return openUnsubInBrowser(url, 'open-embedded-browser', traceId, { email });
 }
 
 function dryRunUnsubscribe(type, url) {
@@ -1737,6 +2122,7 @@ async function getStats() {
     kept: subs.filter(s => s.decision === 'keep').length,
     unsubscribed: subs.filter(s => s.decision === 'unsubscribed').length,
     error: subs.filter(s => s.decision === 'error').length,
+    needsInput: subs.filter(s => s.decision === 'needs_input').length,
     emailsScanned: lastScan ? lastScan.messagesScanned : 0,
     subscriptionEmails: lastScan ? lastScan.subscriptionEmailsFound || 0 : 0,
     lastScanAt: lastScan ? lastScan.at : null
@@ -1922,6 +2308,12 @@ export function handleRuntimeMessage(request, sender) {
     case 'getSubscriptions':
       return getSubscriptions(request.filter);
 
+    case 'getScanOnStartup':
+      return getScanOnStartup().then(scanOnStartup => ({ scanOnStartup }));
+
+    case 'setScanOnStartup':
+      return setScanOnStartup(request.scanOnStartup);
+
     case 'getDryRun':
       return getDryRun().then(dryRun => ({ dryRun }));
 
@@ -1933,6 +2325,18 @@ export function handleRuntimeMessage(request, sender) {
 
     case 'setAutoSendUnsubscribeEmails':
       return setAutoSendUnsubscribeEmails(request.autoSendUnsubscribeEmails);
+
+    case 'getAutoCloseConfirmedTabs':
+      return getAutoCloseConfirmedTabs().then(autoCloseConfirmedTabs => ({ autoCloseConfirmedTabs }));
+
+    case 'setAutoCloseConfirmedTabs':
+      return setAutoCloseConfirmedTabs(request.autoCloseConfirmedTabs);
+
+    case 'getAutoFillUnsubEmail':
+      return getAutoFillUnsubEmail().then(autoFillUnsubEmail => ({ autoFillUnsubEmail }));
+
+    case 'setAutoFillUnsubEmail':
+      return setAutoFillUnsubEmail(request.autoFillUnsubEmail);
 
     case 'getDefaultUnsubscribeDispose':
       return getDefaultUnsubscribeDispose().then(defaultUnsubscribeDispose => ({ defaultUnsubscribeDispose }));
@@ -2006,12 +2410,12 @@ export function handleRuntimeMessage(request, sender) {
     case 'unsubWeb':
       return getDryRun().then(dryRun => dryRun
         ? dryRunUnsubscribe('browser', request.url)
-        : unsubWeb(request.url, request.traceId));
+        : unsubWeb(request.url, request.traceId, request.email));
 
     case 'unsubEmbedded':
       return getDryRun().then(dryRun => dryRun
         ? dryRunUnsubscribe('embedded link', request.url)
-        : unsubEmbedded(request.url, request.traceId));
+        : unsubEmbedded(request.url, request.traceId, request.email));
 
     case 'openTab':
       return browser.tabs.create({ url: '/tab/tab.html' }).then(() => ({ ok: true }));
@@ -2031,6 +2435,23 @@ browser.runtime.onMessage.addListener((request, sender) => {
     console.error(`[ThunderSub] Command failed: ${request.command}`, error);
     throw error;
   });
+});
+
+// Optional scan when Thunderbird itself starts (not on extension reloads).
+// The short delay lets accounts and folders finish loading first.
+const STARTUP_SCAN_DELAY_MS = 10000;
+browser.runtime.onStartup?.addListener(async () => {
+  try {
+    if (!(await getScanOnStartup())) return;
+    setTimeout(() => {
+      if (scanState.status !== 'scanning') {
+        console.log('[ThunderSub] Starting scan on startup');
+        runScan();
+      }
+    }, STARTUP_SCAN_DELAY_MS);
+  } catch (e) {
+    console.warn('[ThunderSub] Could not check the scan-on-startup setting', e);
+  }
 });
 
 console.log('[ThunderSub] Background script loaded');

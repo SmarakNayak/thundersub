@@ -18,5 +18,6 @@ fi
 
 mkdir -p dist
 rm -f "$OUT"
-$ZIP -r -X "$OUT" manifest.json background.html unsub-detect.js scan-scope.js unsub-url.js junk-routing.js background.js popup tab icons
+$ZIP -r -X "$OUT" manifest.json background.html background.js junk-routing.js scan-scope.js unsub-detect.js unsub-page.js unsub-url.js   popup tab icons
+
 echo "Built $OUT"

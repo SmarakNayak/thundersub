@@ -16,8 +16,10 @@ let expandedMoveDestinationIdentity = '';
 let moveDestinationCreateIdentity = '';
 let pendingQuickMoveKeys = [];
 let quickReviewMode = false;
+let neverScanned = false;
 let focusedSubscriptionKey = null;
 const selectedSubscriptionKeys = new Set();
+const DEFAULT_SELECT_LIMIT = 200;
 let hasScannedBefore = false;
 let scanInProgress = false;
 let currentRecipientFilter = '';
@@ -76,10 +78,20 @@ function toast(msg, type = 'info') {
   el.className = `toast toast-${type}`;
   el.textContent = msg;
   c.appendChild(el);
-  setTimeout(() => {
+  // Longer messages and non-success outcomes stay up longer; hovering a toast
+  // keeps it on screen, and clicking it dismisses it.
+  const duration = type === 'success' ? 8000 : Math.min(30000, Math.max(15000, msg.length * 100));
+  let timer = null;
+  const dismiss = () => {
+    clearTimeout(timer);
     el.style.animation = 'fadeOut .3s ease forwards';
     setTimeout(() => el.remove(), 300);
-  }, 6000);
+  };
+  const start = () => { clearTimeout(timer); timer = setTimeout(dismiss, duration); };
+  el.addEventListener('mouseenter', () => clearTimeout(timer));
+  el.addEventListener('mouseleave', start);
+  el.addEventListener('click', dismiss);
+  start();
 }
 
 function positionToastContainer() {
@@ -91,7 +103,43 @@ function positionToastContainer() {
   toastContainer.style.bottom = visible ? `${Math.ceil(height + 32)}px` : '20px';
 }
 
+function withTimeout(promise, ms, label) {
+  let timer;
+  return Promise.race([
+    promise,
+    new Promise((_, reject) => {
+      timer = setTimeout(() => reject(new Error(`${label} timed out after ${Math.round(ms / 1000)}s`)), ms);
+    })
+  ]).finally(() => clearTimeout(timer));
+}
+
+// Read-only "get..." commands are safe to repeat. When Thunderbird restores
+// this tab at startup, the background script may not be listening yet (the
+// first message fails) or may be slow to answer, so these are retried with a
+// timeout instead of leaving the dashboard on "Loading..." forever.
+const GET_COMMAND_TIMEOUT_MS = 20000;
+const GET_COMMAND_ATTEMPTS = 4;
+
+async function sendWithRetry(command, data) {
+  let lastError;
+  for (let attempt = 1; attempt <= GET_COMMAND_ATTEMPTS; attempt++) {
+    try {
+      return await withTimeout(
+        browser.runtime.sendMessage({ command, ...data }),
+        GET_COMMAND_TIMEOUT_MS,
+        `${command}`
+      );
+    } catch (e) {
+      lastError = e;
+      console.warn(`ThunderSub: ${command} attempt ${attempt}/${GET_COMMAND_ATTEMPTS} failed`, e);
+      if (attempt < GET_COMMAND_ATTEMPTS) await new Promise(resolve => setTimeout(resolve, Math.min(1000 * attempt, 3000)));
+    }
+  }
+  throw lastError;
+}
+
 function bg(command, data) {
+  if (/^get[A-Z]/.test(command)) return sendWithRetry(command, data);
   return browser.runtime.sendMessage({ command, ...data });
 }
 
@@ -173,9 +221,15 @@ function findActivityJob(jobId) {
   return allActivityJobs().find(job => job.id === jobId);
 }
 
+// A subscription whose unsubscribe attempt has finished one way or another.
+function isResolvedDecision(decision) {
+  return decision === 'unsubscribed' || decision === 'error' || decision === 'needs_input';
+}
+
 function activityStatus(job) {
   if (job.status === 'queued') return { label: 'Queued', className: 'running' };
   if (job.status === 'running') return { label: job.cancelRequested ? 'Cancelling' : 'Running', className: 'running' };
+  if (job.status === 'complete' && job.needsInput) return { label: 'Needs input', className: 'cancelled' };
   if (job.status === 'complete') return { label: 'Done', className: 'done' };
   if (job.status === 'cancelled') return { label: 'Cancelled', className: 'cancelled' };
   return { label: 'Error', className: 'error' };
@@ -453,6 +507,74 @@ async function updateDryRun(enabled) {
   } catch (e) {
     document.getElementById('dry-run-toggle').checked = dryRun;
     toast('Failed to update dry run setting: ' + (e.message || e), 'error');
+  }
+}
+
+async function loadScanOnStartup() {
+  const input = document.getElementById('scan-on-startup-toggle');
+  try {
+    const result = await bg('getScanOnStartup');
+    if (input) input.checked = result.scanOnStartup === true;
+  } catch (e) {
+    if (input) input.checked = false;
+  }
+}
+
+async function updateScanOnStartup(enabled) {
+  const input = document.getElementById('scan-on-startup-toggle');
+  try {
+    const result = await bg('setScanOnStartup', { scanOnStartup: enabled });
+    if (input) input.checked = result.scanOnStartup === true;
+    toast(result.scanOnStartup ? 'ThunderSub will scan when Thunderbird starts' : 'Scan on startup turned off', 'info');
+  } catch (e) {
+    if (input) input.checked = !enabled;
+    toast('Failed to update scan on startup: ' + (e.message || e), 'error');
+  }
+}
+
+async function loadAutoCloseConfirmedTabs() {
+  const input = document.getElementById('auto-close-confirmed-toggle');
+  try {
+    const result = await bg('getAutoCloseConfirmedTabs');
+    if (input) input.checked = result.autoCloseConfirmedTabs !== false;
+  } catch (e) {
+    if (input) input.checked = true;
+  }
+}
+
+async function updateAutoCloseConfirmedTabs(enabled) {
+  const input = document.getElementById('auto-close-confirmed-toggle');
+  try {
+    const result = await bg('setAutoCloseConfirmedTabs', { autoCloseConfirmedTabs: enabled });
+    if (input) input.checked = result.autoCloseConfirmedTabs === true;
+    toast(result.autoCloseConfirmedTabs ? 'Confirmed unsubscribe tabs will close automatically' : 'Confirmed unsubscribe tabs will stay open', 'info');
+  } catch (e) {
+    if (input) input.checked = !enabled;
+    toast('Failed to update the setting: ' + (e.message || e), 'error');
+  }
+}
+
+async function loadAutoFillUnsubEmail() {
+  const input = document.getElementById('auto-fill-email-toggle');
+  try {
+    const result = await bg('getAutoFillUnsubEmail');
+    if (input) input.checked = result.autoFillUnsubEmail === true;
+  } catch (e) {
+    if (input) input.checked = false;
+  }
+}
+
+async function updateAutoFillUnsubEmail(enabled) {
+  const input = document.getElementById('auto-fill-email-toggle');
+  try {
+    const result = await bg('setAutoFillUnsubEmail', { autoFillUnsubEmail: enabled });
+    if (input) input.checked = result.autoFillUnsubEmail === true;
+    toast(result.autoFillUnsubEmail
+      ? 'ThunderSub will type your address into simple unsubscribe forms and submit them'
+      : 'Unsubscribe forms will be left for you to fill in', 'info');
+  } catch (e) {
+    if (input) input.checked = !enabled;
+    toast('Failed to update the setting: ' + (e.message || e), 'error');
   }
 }
 
@@ -808,8 +930,11 @@ async function loadStats() {
     document.getElementById('fb-keep').textContent = s.kept;
     document.getElementById('fb-unsubscribed').textContent = s.unsubscribed;
     document.getElementById('fb-error').textContent = s.error || 0;
+    document.getElementById('fb-needs_input').textContent = s.needsInput || 0;
     updateErrorBadgeState();
     hasScannedBefore = s.total > 0;
+    // No scan has ever finished and nothing has been found: this is a first run.
+    neverScanned = !s.lastScanAt && !(s.total > 0);
     refreshScanButtonLabel();
     const lastEl = document.getElementById('scan-last');
     if (lastEl) {
@@ -822,6 +947,9 @@ function updateErrorBadgeState() {
   const badge = document.getElementById('fb-error');
   const count = Number.parseInt(badge?.textContent || '0', 10);
   badge?.classList.toggle('has-errors', Number.isFinite(count) && count > 0);
+  const inputBadge = document.getElementById('fb-needs_input');
+  const inputCount = Number.parseInt(inputBadge?.textContent || '0', 10);
+  inputBadge?.classList.toggle('has-input', Number.isFinite(inputCount) && inputCount > 0);
 }
 
 function updateDecisionStats(previousDecision, nextDecision) {
@@ -830,7 +958,8 @@ function updateDecisionStats(previousDecision, nextDecision) {
     pending: ['fb-pending'],
     keep: ['fb-keep'],
     unsubscribed: ['fb-unsubscribed'],
-    error: ['fb-error']
+    error: ['fb-error'],
+    needs_input: ['fb-needs_input']
   };
   const adjust = (decision, amount) => {
     for (const id of (ids[decision] || [])) {
@@ -861,7 +990,8 @@ function removeCachedSubscription(sub, dismissed = false) {
       pending: ['fb-pending'],
       keep: ['fb-keep'],
       unsubscribed: ['fb-unsubscribed'],
-      error: ['fb-error']
+      error: ['fb-error'],
+    needs_input: ['fb-needs_input']
     }[sub.decision] || [], -1);
   }
   refreshRecipientFilter();
@@ -904,7 +1034,10 @@ async function loadSubs(filter) {
     refreshRecipientFilter();
     renderFilteredCards();
   } catch (e) {
-    grid.replaceChildren(el('div', { style: 'color:var(--danger);padding:40px' }, 'Failed to load.'));
+    const retry = el('button', { class: 'btn btn-muted', style: 'margin-left:12px' }, 'Retry');
+    retry.addEventListener('click', () => loadSubs(filter));
+    grid.replaceChildren(el('div', { style: 'color:var(--danger);padding:40px' },
+      `Failed to load: ${e.message || e}`, retry));
   }
 }
 
@@ -1008,6 +1141,14 @@ function updateQuickReviewBar() {
   }
   const clearButton = document.getElementById('quick-review-clear-selection');
   if (clearButton) clearButton.disabled = count === 0;
+  const selectAllButton = ensureSelectAllButton();
+  if (selectAllButton) {
+    const total = document.querySelectorAll('#cards-grid .card').length;
+    selectAllButton.hidden = false;
+    selectAllButton.disabled = total === 0;
+    selectAllButton.textContent = total ? `Select ${Math.min(selectLimit(), total)}` : 'Select';
+    selectAllButton.title = `Select the first ${selectLimit()} visible subscriptions (a)`;
+  }
   const unsubscribeButton = document.getElementById('quick-review-unsub-selected');
   if (unsubscribeButton) unsubscribeButton.textContent = currentFilter === 'pending' ? 'Unsubscribe selected' : 'Retry selected';
   const removeButton = document.getElementById('quick-review-remove-selected');
@@ -1056,6 +1197,28 @@ function moveCardFocus(direction) {
       bestScore = score;
     }
   }
+  if (direction === 'left' || direction === 'right') {
+    // Left/right stay within the current row; at a row edge they wrap to the
+    // last/first card of the adjacent row (cards are in row-major DOM order).
+    const sameRow = card => Math.abs(
+      card.getBoundingClientRect().top + card.getBoundingClientRect().height / 2 - currentY
+    ) < currentRect.height / 2;
+    best = null;
+    bestScore = Infinity;
+    for (const card of cards) {
+      if (card === current || !sameRow(card)) continue;
+      const dx = card.getBoundingClientRect().left + card.getBoundingClientRect().width / 2 - currentX;
+      if (direction === 'left' ? dx >= -2 : dx <= 2) continue;
+      if (Math.abs(dx) < bestScore) {
+        best = card;
+        bestScore = Math.abs(dx);
+      }
+    }
+    if (!best) {
+      const index = cards.indexOf(current);
+      best = cards[direction === 'right' ? index + 1 : index - 1] || null;
+    }
+  }
   if (best) setFocusedCard(best.dataset.subscriptionKey, true, true);
 }
 
@@ -1078,6 +1241,64 @@ function toggleCardSelection(subscriptionKey) {
     }
   }
   updateQuickReviewBar();
+}
+
+function selectAllVisibleCards() {
+  if (!quickReviewMode) return;
+  // Replace the selection with the first N visible cards, in displayed order.
+  clearCardSelection();
+  const cards = [...document.querySelectorAll('#cards-grid .card')].slice(0, selectLimit());
+  for (const card of cards) {
+    const key = card.dataset.subscriptionKey;
+    if (!key) continue;
+    selectedSubscriptionKeys.add(key);
+    card.classList.add('selected');
+    card.setAttribute('aria-selected', 'true');
+    const button = card.querySelector('.js-card-select');
+    if (button) {
+      button.textContent = '✓';
+      button.setAttribute('aria-pressed', 'true');
+      button.setAttribute('aria-label', 'Remove from selection');
+      button.title = 'Remove from selection (Space)';
+    }
+  }
+  updateQuickReviewBar();
+}
+
+function ensureSelectAllButton() {
+  let button = document.getElementById('quick-review-select-all');
+  if (button) return button;
+  const unsubscribeButton = document.getElementById('quick-review-unsub-selected');
+  if (!unsubscribeButton) return null;
+  button = document.createElement('button');
+  button.id = 'quick-review-select-all';
+  button.type = 'button';
+  button.className = unsubscribeButton.className;
+  button.textContent = 'Select';
+  button.addEventListener('click', selectAllVisibleCards);
+  const limitInput = document.createElement('input');
+  limitInput.id = 'quick-review-select-limit';
+  limitInput.type = 'number';
+  limitInput.min = '1';
+  limitInput.step = '1';
+  limitInput.value = String(DEFAULT_SELECT_LIMIT);
+  limitInput.title = 'How many subscriptions "Select" picks (from the top of the list)';
+  limitInput.setAttribute('aria-label', 'Number of subscriptions to select');
+  limitInput.style.width = '5em';
+  limitInput.addEventListener('input', updateQuickReviewBar);
+  limitInput.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      selectAllVisibleCards();
+    }
+  });
+  unsubscribeButton.before(limitInput, button);
+  return button;
+}
+
+function selectLimit() {
+  const value = parseInt(document.getElementById('quick-review-select-limit')?.value, 10);
+  return Number.isFinite(value) && value > 0 ? value : DEFAULT_SELECT_LIMIT;
 }
 
 function clearCardSelection() {
@@ -1216,7 +1437,7 @@ async function removeSelectedOrFocused() {
   if (subs.length === 1 && !selectedSubscriptionKeys.size) {
     const sub = subs[0];
     if (sub.decision === 'pending' && subHasMessages(sub)) await doJunk(focusedSubscriptionKey);
-    else if (sub.decision === 'unsubscribed' || sub.decision === 'error') await doDismiss(focusedSubscriptionKey);
+    else if (isResolvedDecision(sub.decision)) await doDismiss(focusedSubscriptionKey);
     return;
   }
 
@@ -1241,7 +1462,7 @@ async function removeSelectedOrFocused() {
     return;
   }
 
-  const dismissable = subs.filter(sub => sub.decision === 'unsubscribed' || sub.decision === 'error');
+  const dismissable = subs.filter(sub => isResolvedDecision(sub.decision));
   clearCardSelection();
   let dismissed = 0;
   for (const sub of dismissable) {
@@ -1346,7 +1567,7 @@ const REVIEW_KEYMAP = new Map([
   ['?', 'showHelp'],
   ['q', 'toggleQuickReview'],
   ['1', 'showPending'], ['2', 'showKept'],
-  ['3', 'showUnsubscribed'], ['4', 'showErrors'],
+  ['3', 'showUnsubscribed'], ['4', 'showNeedsInput'], ['5', 'showErrors'],
   ['h', 'focusLeft'], ['ArrowLeft', 'focusLeft'],
   ['j', 'focusDown'], ['ArrowDown', 'focusDown'],
   ['k', 'focusUp'], ['ArrowUp', 'focusUp'],
@@ -1359,7 +1580,8 @@ const REVIEW_KEYMAP = new Map([
 ]);
 
 const QUICK_REVIEW_KEYMAP = new Map([
-  [' ', 'toggleSelection']
+  [' ', 'toggleSelection'],
+  ['a', 'selectAll']
 ]);
 
 const KEYMAPS_BY_CONTEXT = {
@@ -1375,7 +1597,7 @@ const KEYMAPS_BY_CONTEXT = {
 const EXCLUSIVE_KEYBOARD_CONTEXTS = new Set(['nativeInput']);
 
 const NON_REPEATING_QUICK_REVIEW_COMMANDS = new Set([
-  'toggleQuickReview', 'toggleSelection', 'unsubscribe', 'keep', 'view', 'cleanup', 'reviewAgain', 'remove', 'fullScan', 'clearActivity', 'showPending', 'showKept', 'showUnsubscribed', 'showErrors', 'showHelp', 'escape', 'returnToCard', 'confirmModal', 'closeModal'
+  'toggleQuickReview', 'toggleSelection', 'selectAll', 'unsubscribe', 'keep', 'view', 'cleanup', 'reviewAgain', 'remove', 'fullScan', 'clearActivity', 'showPending', 'showKept', 'showUnsubscribed', 'showNeedsInput', 'showErrors', 'showHelp', 'escape', 'returnToCard', 'confirmModal', 'closeModal'
 ]);
 
 function updateContextShortcuts() {
@@ -1385,6 +1607,7 @@ function updateContextShortcuts() {
     pending: [['u', 'unsubscribe'], ['i', 'keep'], ['v', 'view'], ['x', 'mark as spam']],
     keep: [['v', 'view'], ['c', 'cleanup'], ['r', 'review again']],
     unsubscribed: [['u', 'retry unsubscribe'], ['v', 'view'], ['c', 'cleanup'], ['r', 'review again'], ['x', 'dismiss']],
+    needs_input: [['u', 'retry unsubscribe'], ['v', 'view'], ['c', 'cleanup'], ['r', 'review again'], ['x', 'dismiss']],
     error: [['u', 'retry unsubscribe'], ['v', 'view'], ['c', 'cleanup'], ['r', 'review again'], ['x', 'dismiss']]
   }[currentFilter] || [];
   container.replaceChildren(...actions.flatMap(([key, label], index) => [
@@ -1537,6 +1760,7 @@ async function runQuickReviewCommand(command) {
       showPending: 'pending',
       showKept: 'keep',
       showUnsubscribed: 'unsubscribed',
+      showNeedsInput: 'needs_input',
       showErrors: 'error'
     };
     const filter = filters[command];
@@ -1552,13 +1776,15 @@ async function runQuickReviewCommand(command) {
     setFocusedCard(keys[keys.length - 1], true, true);
   } else if (command === 'toggleSelection' && focusedSubscriptionKey) {
     toggleCardSelection(focusedSubscriptionKey);
+  } else if (command === 'selectAll') {
+    selectAllVisibleCards();
   } else if (command === 'unsubscribe') {
     if (selectedSubscriptionKeys.size) {
       await quickUnsubscribeSelected();
     } else if (sub?.decision === 'pending') {
       if (!quickReviewMode) openUnsubModal(focusedSubscriptionKey);
       else await quickUnsubscribe(focusedSubscriptionKey);
-    } else if (sub?.decision === 'unsubscribed' || sub?.decision === 'error') {
+    } else if (isResolvedDecision(sub?.decision)) {
       openUnsubModal(focusedSubscriptionKey, true);
     }
   } else if (command === 'keep') {
@@ -1791,7 +2017,7 @@ function buildActions(s) {
     ];
   }
 
-  if (s.decision === 'unsubscribed' || s.decision === 'error') {
+  if (isResolvedDecision(s.decision)) {
     // View and Cleanup act on stored messages; with none left they can only fail.
     const messageButtons = subHasMessages(s) ? [
       btn('btn btn-view js-view', 'View'),
@@ -1828,9 +2054,10 @@ function buildCard(s) {
     if (s.dispose && DISPOSE_LABELS[s.dispose]) badges.push(el('span', { class: 'badge badge-neutral' }, DISPOSE_LABELS[s.dispose]));
   }
   if (s.decision === 'error') badges.push(el('span', { class: 'badge badge-error' }, 'Error'));
+  if (s.decision === 'needs_input') badges.push(el('span', { class: 'badge badge-input' }, 'Needs input'));
 
   const dateStr = s.lastDate ? new Date(s.lastDate).toLocaleDateString() : '';
-  const dismissable = s.decision === 'unsubscribed' || s.decision === 'error';
+  const dismissable = isResolvedDecision(s.decision);
   const attrs = { 'data-subscription-key': subKey(s) };
 
   const key = subKey(s);
@@ -1875,7 +2102,7 @@ function buildCard(s) {
       s.error?.message && el('div', {
         class: 'card-error', title: s.error.responseMessage || s.error.message
       }, `${s.error.stage || 'Error'}: ${s.error.message}`),
-      quickReviewDescription && (s.decision === 'pending' || s.decision === 'unsubscribed' || s.decision === 'error') &&
+      quickReviewDescription && (s.decision === 'pending' || isResolvedDecision(s.decision)) &&
         el('div', { class: 'quick-review-action-note', title: quickReviewDescription.title }, quickReviewDescription.text),
       SHOW_DETECTION_UI && el('button', { class: 'evidence-toggle js-evidence-toggle', type: 'button' }, 'Why detected?')),
     SHOW_DETECTION_UI && el('div', { class: 'detection-evidence' }, buildDetectionEvidence(s)),
@@ -2257,7 +2484,9 @@ function openCleanupModal(subscriptionKey, action) {
   cleanupDefaultAction = action || defaultUnsubscribeDispose;
   resetModalProgress();
 
-  const statusLabel = sub.decision === 'error'
+  const statusLabel = sub.decision === 'needs_input'
+    ? 'needs your input on the unsubscribe page'
+    : sub.decision === 'error'
     ? (sub.error?.stage === 'unsubscribe' ? 'unsubscribe failed' : `${sub.error?.stage || 'action'} failed`)
     : 'already unsubscribed';
 
@@ -2668,6 +2897,9 @@ async function processActivityJob(job) {
   // Fire unsubscribe
   let ok = false;
   let unsubscribeResult = null;
+  // The address this subscription was sent to, for the optional auto-fill of
+  // unsubscribe forms that ask for an email.
+  const unsubscribeEmailAddress = String(job.recipientAddress || job.accountIdentityAddress || '').trim();
   let unsubscribeError = null;
   if (job.mode === 'cleanup' || job.mode === 'keep-cleanup') {
     ok = true;
@@ -2685,16 +2917,42 @@ async function processActivityJob(job) {
         });
         ok = true;
       } else if (method.type === 'embedded') {
-        unsubscribeResult = await trace.bg('unsubEmbedded', { url: method.url });
-        ok = true;
+        unsubscribeResult = await trace.bg('unsubEmbedded', { url: method.url, email: unsubscribeEmailAddress });
+        ok = unsubscribeResult?.ok !== false;
       } else {
-        unsubscribeResult = await trace.bg('unsubWeb', { url: method.url });
-        ok = true;
+        unsubscribeResult = await trace.bg('unsubWeb', { url: method.url, email: unsubscribeEmailAddress });
+        ok = unsubscribeResult?.ok !== false;
       }
     } catch (e) {
       unsubscribeError = e;
       ok = false;
     }
+  }
+
+  if (!ok && unsubscribeResult?.needsInput) {
+    // The page is waiting for the user (an email box, a confirm click). That
+    // is not a failure, so file it under "Needs input" with the tab left open.
+    const message = unsubscribeResult.message || 'The unsubscribe page needs your input';
+    const error = errorPayload('needs input', message, { host: unsubscribeResult.host || '' });
+    await trace.bg('decide', {
+      ...jobRequest,
+      decision: 'needs_input',
+      dispose: null,
+      error
+    });
+    sub.dispose = null;
+    updateDecisionStats(sub.decision, 'needs_input');
+    sub.decision = 'needs_input';
+    sub.error = error;
+    sub.processing = false;
+    toast(message, 'info');
+    if (currentFilter === 'needs_input') renderFilteredCards();
+    else removeCachedSubscription(sub);
+    trace.log('unsubscribe:needs-input', undefined, { stage: 'unsubscribe' });
+    job.needsInput = true;
+    job.status = 'complete';
+    setActivityJobProgress(job, message, 100);
+    return;
   }
 
   if (!ok) {
@@ -2706,12 +2964,15 @@ async function processActivityJob(job) {
     } : {};
     Object.assign(job, responseDetails);
     const error = errorPayload('unsubscribe', message, responseDetails);
+    // A failed unsubscribe never touches email, so nothing is recorded as
+    // deleted/moved (a saved dispose would show a misleading Delete/Move badge).
     await trace.bg('decide', {
       ...jobRequest,
       decision: 'error',
-      dispose,
+      dispose: null,
       error
     });
+    sub.dispose = null;
     updateDecisionStats(sub.decision, 'error');
     sub.decision = 'error';
     sub.error = error;
@@ -2722,6 +2983,15 @@ async function processActivityJob(job) {
     trace.log('unsubscribe:failed', undefined, { stage: 'unsubscribe' });
     job.status = 'failed';
     setActivityJobProgress(job, message, 100);
+    return;
+  }
+
+  // Safety net: an unsubscribe job may only reach cleanup once its unsubscribe
+  // step succeeded. (Standalone cleanup jobs have no unsubscribe step.)
+  if (job.mode !== 'cleanup' && job.mode !== 'keep-cleanup' && (!ok || !method)) {
+    job.status = 'failed';
+    setActivityJobProgress(job, 'Unsubscribe was not completed; emails were not touched', 100);
+    clearProcessingFlag(job);
     return;
   }
 
@@ -2910,6 +3180,13 @@ async function processActivityJob(job) {
     }
   } else if (unsubscribeResult?.sent) {
     outcomeMessage = `Sent unsubscribe email for ${name}`;
+  } else if (ok && (method?.type === 'web' || method?.type === 'embedded')) {
+    if (unsubscribeResult?.confirmed) {
+      outcomeMessage = `Unsubscribed from ${name} (page confirmed it)`;
+    } else {
+      outcomeMessage = `Opened the unsubscribe page for ${name} in your browser - not verified. Turn on Auto-close unsubscribe tabs to have ThunderSub check the page`;
+      outcomeType = 'info';
+    }
   } else if (ok) {
     outcomeMessage = `Unsubscribed from ${name}`;
   } else {
@@ -2958,7 +3235,7 @@ function setFilter(filter, btn) {
   document.querySelectorAll('.filter-tab').forEach(t => t.classList.remove('active'));
   btn.classList.add('active');
 
-  const titles = { pending: 'Pending', keep: 'Kept', unsubscribed: 'Unsubscribed', error: 'Errors' };
+  const titles = { pending: 'Pending', keep: 'Kept', unsubscribed: 'Unsubscribed', needs_input: 'Needs input', error: 'Errors' };
   document.getElementById('main-title').textContent = titles[filter] || filter;
   updateContextShortcuts();
   loadSubs(filter);
@@ -3284,6 +3561,15 @@ document.addEventListener('DOMContentLoaded', async () => {
     toggle.textContent = open ? '▸' : '▾';
   });
   refreshScanScopeLabel();
+  document.getElementById('scan-on-startup-toggle').addEventListener('change', (e) => {
+    updateScanOnStartup(e.target.checked);
+  });
+  document.getElementById('auto-close-confirmed-toggle')?.addEventListener('change', (e) => {
+    updateAutoCloseConfirmedTabs(e.target.checked);
+  });
+  document.getElementById('auto-fill-email-toggle')?.addEventListener('change', (e) => {
+    updateAutoFillUnsubEmail(e.target.checked);
+  });
   document.getElementById('dry-run-toggle').addEventListener('change', (e) => {
     updateDryRun(e.target.checked);
   });
@@ -3436,12 +3722,24 @@ document.addEventListener('DOMContentLoaded', async () => {
     renderFilteredCards();
   });
 
-  await loadDryRun();
-  await loadAutoSendUnsubscribeEmails();
-  await loadMoveDestinationsByIdentity();
-  await loadDefaultUnsubscribeDispose();
-  await loadQuickReviewMode();
-  await loadStats();
+  // Each startup step is bounded and isolated, so one slow or failing request
+  // can no longer stop the list from loading.
+  const startupStep = async (name, step) => {
+    try {
+      await withTimeout(step(), 30000, `startup:${name}`);
+    } catch (e) {
+      console.warn(`ThunderSub: startup step "${name}" did not finish`, e);
+    }
+  };
+  await startupStep('dry run', loadDryRun);
+  await startupStep('auto-send', loadAutoSendUnsubscribeEmails);
+  await startupStep('auto-close', loadAutoCloseConfirmedTabs);
+  await startupStep('auto-fill', loadAutoFillUnsubEmail);
+  await startupStep('scan on startup', loadScanOnStartup);
+  await startupStep('move destinations', loadMoveDestinationsByIdentity);
+  await startupStep('default cleanup', loadDefaultUnsubscribeDispose);
+  await startupStep('quick review', loadQuickReviewMode);
+  await startupStep('stats', loadStats);
   await loadSubs('pending');
 
   try {
@@ -3461,4 +3759,11 @@ document.addEventListener('DOMContentLoaded', async () => {
       pollScanStatus();
     }
   } catch (e) { /* ignore */ }
+
+  // First run only: start the scan automatically, as if Scan Emails had been
+  // pressed. After a scan has completed once this never fires again.
+  if (neverScanned && !scanInProgress) {
+    console.log('ThunderSub: first run, starting the initial scan');
+    await startScan();
+  }
 });
