@@ -22,6 +22,10 @@
     <h3>Scanner</h3>
     <button id="scan-btn">Scan Emails</button>
     <button id="scan-scope-btn" class="scan-scope-btn" title="Choose which accounts, folders, and senders are scanned">Scan scope: all folders</button>
+    <label class="scan-startup" title="Run a scan automatically each time Thunderbird starts">
+      <input type="checkbox" id="scan-on-startup-toggle">
+      <span>Scan for new messages on startup</span>
+    </label>
     <div class="scan-last" id="scan-last"></div>
     <div class="scan-controls" id="scan-controls">
       <button id="pause-btn">Pause</button>
@@ -52,6 +56,9 @@
     <button class="filter-tab" data-filter="unsubscribed">
       Unsubscribed <span class="filter-badge" id="fb-unsubscribed">0</span>
     </button>
+    <button class="filter-tab" data-filter="needs_input">
+      Needs input <span class="filter-badge" id="fb-needs_input">0</span>
+    </button>
     <button class="filter-tab" data-filter="error">
       Errors <span class="filter-badge" id="fb-error">0</span>
     </button>
@@ -77,6 +84,20 @@
         <small>Send mailto unsubscribe requests without opening a draft first</small>
       </span>
       <input type="checkbox" id="auto-send-email-toggle">
+    </label>
+    <label class="settings-toggle">
+      <span>
+        <strong>Close confirmed unsubscribe tabs</strong>
+        <small>Close the unsubscribe page once it confirms you are unsubscribed. Pages that need you stay open</small>
+      </span>
+      <input type="checkbox" id="auto-close-confirmed-toggle">
+    </label>
+    <label class="settings-toggle">
+      <span>
+        <strong>Auto-fill my email on unsubscribe pages</strong>
+        <small>Type the address the email was sent to into simple unsubscribe forms and submit them. Skips captchas, surveys and forms with several fields</small>
+      </span>
+      <input type="checkbox" id="auto-fill-email-toggle">
     </label>
     <div class="settings-select">
       <span>
@@ -158,7 +179,7 @@
     <strong>Keyboard shortcuts</strong>
     <span id="context-shortcuts"></span>
     <span><kbd>←</kbd><kbd>↓</kbd><kbd>↑</kbd><kbd>→</kbd> or <kbd>h</kbd><kbd>j</kbd><kbd>k</kbd><kbd>l</kbd> move · <kbd>g</kbd>/<kbd>G</kbd> first/last · <kbd>S</kbd> full scan · <kbd>C</kbd> clear activity · <kbd>q</kbd> toggle Quick Review</span>
-    <span><kbd>Space</kbd> select · <kbd>Enter</kbd> submit · <kbd>Esc</kbd> clear selection/cancel modal · <kbd>1</kbd>/<kbd>2</kbd>/<kbd>3</kbd>/<kbd>4</kbd> Pending/Kept/Unsubscribed/Errors</span>
+    <span><kbd>Space</kbd> select · <kbd>Enter</kbd> submit · <kbd>Esc</kbd> clear selection/cancel modal · <kbd>1</kbd>/<kbd>2</kbd>/<kbd>3</kbd>/<kbd>4</kbd>/<kbd>5</kbd> Pending/Kept/Unsubscribed/Needs input/Errors</span>
   </div>
   <div id="cards-grid" role="grid" aria-label="Subscriptions">
     <div id="loading"><div class="spinner"></div>Loading...</div>
