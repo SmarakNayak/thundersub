@@ -9,6 +9,9 @@ A Close confirmed unsubscribe tabs setting closes tabs once the page confirms th
 An opt-in Auto-fill my email on unsubscribe pages setting types the address the email was sent to into simple forms and submits them. It skips captchas, surveys and multi-field forms.
 A confirmation pattern was added for the geo-blocked “offer not available in your country” page.
 
+Moving from one email to the next
+fixed when you are in quick select, and move the arrow to the right, it skips and when at the end of the row, goes down to the next row at the beginning.
+
 Scanning
 
 A Scan for new messages on startup toggle was added.
