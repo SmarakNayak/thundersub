@@ -1807,6 +1807,9 @@ function buildActions(s) {
   return [
     btn('btn btn-view js-view', 'View'),
     keepSplit(),
+    subHasMessages(s) && btn('btn btn-outline js-just-delete', 'Delete',
+      'Just clean up: move all emails from this sender to the trash, without unsubscribing. ' +
+      'The card returns with the next scan once new mail arrives.'),
     btn('btn btn-unsub js-open-modal', 'Unsubscribe')
   ];
 }
@@ -1986,6 +1989,11 @@ function attachCardListeners() {
       await doJunk(btn.dataset.subscriptionKey);
       return;
     }
+
+    if (btn.classList.contains('js-just-delete')) {
+      await doJustDelete(btn.dataset.subscriptionKey);
+      return;
+    }
   });
 }
 
@@ -2033,6 +2041,35 @@ async function doJunk(subscriptionKey, { confirmAction = true, silent = false } 
   } catch (e) {
     if (!silent) toast('Failed to junk emails: ' + (e.message || e), 'error');
     return { ok: false, junked: 0, dryRun: false };
+  }
+}
+
+// Cleanup without a decision: moves every email of the subscription to the
+// trash and takes the card off the list, without contacting the sender (old
+// mail whose unsubscribe link has expired, senders that no longer write).
+// Scans skip the trash, so the card returns once new mail arrives.
+async function doJustDelete(subscriptionKey) {
+  const sub = findSubByKey(subscriptionKey);
+  if (!sub) return false;
+  const count = (sub.messageGroups || []).reduce((sum, g) => sum + groupMessageCount(g), 0);
+  const name = sub.senderName || sub.senderEmail;
+  if (!confirm(`Move ${count} emails from ${name} to the trash? The sender will not be contacted; ` +
+    'the card returns with the next scan once new mail arrives.')) {
+    return false;
+  }
+  try {
+    const result = await bg('deleteEmails', { ...subRequest(sub), messageGroups: sub.messageGroups });
+    if (result?.dryRun) {
+      toast(`Dry run: would delete ${result.deleted || 0} emails from ${name}. No changes made.`, 'info');
+      return true;
+    }
+    await bg('dismiss', subRequest(sub));
+    removeCachedSubscription(sub, true);
+    toast(`Moved ${result?.deleted || 0} emails from ${name} to the trash`, 'success');
+    return true;
+  } catch (e) {
+    toast('Failed to delete emails: ' + (e.message || e), 'error');
+    return false;
   }
 }
 
