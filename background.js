@@ -6,9 +6,10 @@
  * adapted from BetterUnsubscribe by Luc Bennett (MPL-2.0):
  * https://github.com/LucBennett/BetterUnsubscribe */
 
-import { UNSUB_REGEX, mayContainUnsubWording } from './unsub-detect.js';
+import { UNSUB_REGEX, mayContainUnsubWording, looksLikeUnsubHref, isPointerText, findUnsubUrlInText } from './unsub-detect.js';
 import { buildAddressSkipMatcher } from './scan-scope.js';
 import { oneClickUrlBlockReason, browserUrlBlockReason } from './unsub-url.js';
+import { untrackUrl } from './untrack-url.js';
 import { junkFolderForGroup } from './junk-routing.js';
 
 // ── State ────────────────────────────────────────────────────────────────────
@@ -414,7 +415,6 @@ function recipientMatchesSkip(recipient, skipsRecipient) {
 // ── Embedded unsubscribe link detection ──────────────────────────────────────
 // The localized "unsubscribe" wording (UNSUB_REGEX) is imported from
 // unsub-detect.js so the test suite can exercise the term list directly.
-const URL_REGEX = /https?:\/\/[^\s"'<>]{1,1000}/g;
 const QUOTED_CONTAINER_SELECTOR = [
   'blockquote',
   '.gmail_quote',
@@ -426,18 +426,42 @@ const QUOTED_CONTAINER_SELECTOR = [
 ].join(',');
 const FORWARDED_TEXT_MARKER = /^\s*(?:begin forwarded message:|[-_]{2,}\s*(?:original|forwarded) message\s*[-_]{2,})\s*$/im;
 
-function findEmbeddedUnsubLink(messagePart) {
+async function findEmbeddedUnsubLink(messagePart) {
   if (!messagePart) return null;
-  const htmlLink = findEmbeddedLinkHTML(messagePart);
+  const htmlLink = await findEmbeddedLinkHTML(messagePart);
   if (htmlLink) return htmlLink;
   return findEmbeddedLinkText(messagePart);
 }
 
-function findEmbeddedLinkHTML(part) {
+// A link near unsubscribe wording counts if its address (also once
+// click-tracking is unwrapped offline) or its text looks like an unsubscribe
+// or mail-settings link, or if it only points ("click here") from close by.
+// `verdicts` caches the address/text verdict per link for one mail: outer
+// levels contain the links of the inner ones again, and judging may unwrap a
+// tracking link. The cheap pointer check depends on the distance and is
+// never cached.
+async function isNearbyUnsubLink(link, depth, verdicts) {
+  const text = link.textContent || '';
+  if (depth <= 2 && isPointerText(text)) return true;
+  if (!verdicts.has(link)) {
+    let verdict = looksLikeUnsubHref(link.href) || looksLikeUnsubHref(text);
+    if (!verdict) {
+      try {
+        verdict = looksLikeUnsubHref(await untrackUrl(link.href));
+      } catch (e) {
+        verdict = false;
+      }
+    }
+    verdicts.set(link, verdict);
+  }
+  return verdicts.get(link);
+}
+
+async function findEmbeddedLinkHTML(part) {
   if (part.parts) {
     for (const sub of part.parts) {
       if (String(sub.contentType || '').toLowerCase().startsWith('message/rfc822')) continue;
-      const result = findEmbeddedLinkHTML(sub);
+      const result = await findEmbeddedLinkHTML(sub);
       if (result) return result;
     }
   }
@@ -475,16 +499,20 @@ function findEmbeddedLinkHTML(part) {
         return href;
       }
     }
+    const verdicts = new Map();
     const textWalker = doc.createTreeWalker(doc.body, NodeFilter.SHOW_TEXT);
     while (textWalker.nextNode()) {
       if (UNSUB_REGEX.test(textWalker.currentNode.textContent)) {
+        // Nearby links must look like unsubscribe links themselves, or
+        // point ("click here") from close by; see isNearbyUnsubLink.
         let el = textWalker.currentNode.parentElement;
         for (let depth = 0; depth < 5 && el; depth++) {
           if (el.tagName === 'A' && el.href && el.href.startsWith('http')) {
             return el.href;
           }
-          const siblingLink = el.querySelector('a[href^="http"]');
-          if (siblingLink) return siblingLink.href;
+          for (const link of el.querySelectorAll('a[href^="http"]')) {
+            if (await isNearbyUnsubLink(link, depth, verdicts)) return link.href;
+          }
           el = el.parentElement;
         }
       }
@@ -505,26 +533,7 @@ function nextNodeAfter(node, root) {
 function findEmbeddedLinkText(part) {
   const body = extractTextBody(part);
   if (!body) return null;
-  const authoredBody = stripQuotedText(body);
-
-  const unsubMatches = [...authoredBody.matchAll(new RegExp(UNSUB_REGEX.source, 'giu'))];
-  if (unsubMatches.length === 0) return null;
-
-  const urlMatches = [...authoredBody.matchAll(URL_REGEX)];
-  if (urlMatches.length === 0) return null;
-
-  let bestUrl = null;
-  let bestDist = 300;
-  for (const um of unsubMatches) {
-    for (const urlm of urlMatches) {
-      const dist = Math.abs(um.index - urlm.index);
-      if (dist < bestDist) {
-        bestDist = dist;
-        bestUrl = urlm[0];
-      }
-    }
-  }
-  return bestUrl;
+  return findUnsubUrlInText(stripQuotedText(body));
 }
 
 function stripQuotedText(body) {
@@ -1089,7 +1098,7 @@ async function runScan() {
 
               // Collect embedded links even when header-based methods exist so
               // retry can offer every detected alternative.
-              embeddedUrl = findEmbeddedUnsubLink(full);
+              embeddedUrl = await findEmbeddedUnsubLink(full);
               if (urls.length === 0 && !embeddedUrl) continue;
 
               scanState.subscriptionEmailsFound++;
@@ -1443,8 +1452,12 @@ async function unsubMail(mailtoUrl, recipientAddress, traceId) {
   return { ok: true, to, sent: true };
 }
 
-async function openUnsubInBrowser(url, phase, traceId) {
+async function openUnsubInBrowser(rawUrl, phase, traceId) {
   const startedAt = Date.now();
+  // Unwrap click-tracking redirectors first, so the safety gate below checks
+  // the destination that will actually be opened.
+  const url = await untrackUrl(rawUrl);
+  if (url !== rawUrl) tracePhase(traceId, `${phase}-untracked`, startedAt);
   const blockReason = browserUrlBlockReason(url);
   if (blockReason) {
     tracePhase(traceId, `${phase}-blocked`, startedAt, { reason: blockReason });
@@ -1466,6 +1479,14 @@ async function unsubEmbedded(url, traceId) {
 function dryRunUnsubscribe(type, url) {
   console.log(`[DRY RUN] Would unsubscribe via ${type}: ${url}`);
   return { ok: true, dryRun: true, type, url };
+}
+
+// Browser methods open the untracked link, so the dry run reports that one.
+async function dryRunUnsubscribeInBrowser(type, rawUrl) {
+  const url = await untrackUrl(rawUrl);
+  if (url === rawUrl) return dryRunUnsubscribe(type, url);
+  console.log(`[DRY RUN] Would unsubscribe via ${type}: ${url} (tracking removed from ${rawUrl})`);
+  return { ok: true, dryRun: true, type, url, originalUrl: rawUrl };
 }
 
 // ── Delete / Move ────────────────────────────────────────────────────────────
@@ -1922,6 +1943,10 @@ export function handleRuntimeMessage(request, sender) {
     case 'getSubscriptions':
       return getSubscriptions(request.filter);
 
+    case 'untrackUrl':
+      // Lets the unsubscribe dialog show the link that will actually open.
+      return untrackUrl(String(request.url || '')).then(url => ({ url }));
+
     case 'getDryRun':
       return getDryRun().then(dryRun => ({ dryRun }));
 
@@ -2005,12 +2030,12 @@ export function handleRuntimeMessage(request, sender) {
 
     case 'unsubWeb':
       return getDryRun().then(dryRun => dryRun
-        ? dryRunUnsubscribe('browser', request.url)
+        ? dryRunUnsubscribeInBrowser('browser', request.url)
         : unsubWeb(request.url, request.traceId));
 
     case 'unsubEmbedded':
       return getDryRun().then(dryRun => dryRun
-        ? dryRunUnsubscribe('embedded link', request.url)
+        ? dryRunUnsubscribeInBrowser('embedded link', request.url)
         : unsubEmbedded(request.url, request.traceId));
 
     case 'openTab':
