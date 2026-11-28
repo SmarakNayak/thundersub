@@ -1135,7 +1135,9 @@ async function runScan() {
               // are preferred regardless of folder scan order.
               for (const u of urls) {
                 s.unsubCandidates.push({ url: u, date: dateStr });
-                if (oneClick && u.startsWith('http')) {
+                // One-click needs https (RFC 8058); http links stay browser links.
+                const testEndpoint = ALLOW_LOOPBACK_HTTP_FOR_TESTING && u.startsWith('http://127.0.0.1:8765/');
+                if (oneClick && (u.startsWith('https:') || testEndpoint)) {
                   s.oneClickCandidates.push({ url: u, date: dateStr });
                   s.methodCandidates.push({ type: 'oneclick', url: u, date: dateStr });
                 }
@@ -1333,14 +1335,21 @@ async function unsubOneClick(url, traceId) {
     tracePhase(traceId, 'one-click-blocked', startedAt, { reason: blockReason });
     throw new Error(`Blocked unsafe one-click unsubscribe URL (${blockReason}) — retry with the web or email method instead.`);
   }
+  // Redirects are never followed ('manual' does not follow them either), but
+  // unlike 'error' it lets us say what happened instead of a bare
+  // "NetworkError": some senders answer the POST with a redirect to a page.
   const resp = await fetch(url, {
     method: 'POST',
-    redirect: 'error',
+    redirect: 'manual',
     credentials: 'omit',
     headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
     body: 'List-Unsubscribe=One-Click'
   });
-  const message = resp.ok ? '' : await limitedResponseText(resp, 1000);
+  if (resp.type === 'opaqueredirect' || (resp.status >= 300 && resp.status < 400)) {
+    tracePhase(traceId, 'one-click-redirect', startedAt, { status: resp.status });
+    throw new Error('the server answered with a redirect instead of a confirmation, so it is unclear whether this unsubscribed you — retry with the email or browser method.');
+  }
+  const message = resp.ok ? '' : htmlTitleOrText(await limitedResponseText(resp, 1000));
   tracePhase(traceId, 'one-click-fetch', startedAt, { status: resp.status, ok: resp.ok });
   return {
     ok: resp.ok,
@@ -1348,6 +1357,19 @@ async function unsubOneClick(url, traceId) {
     statusText: resp.statusText,
     message
   };
+}
+
+// Error pages (Cloudflare & co.) are HTML; their <title> says what went
+// wrong ("526: Invalid SSL certificate"), the markup around it is noise.
+function htmlTitleOrText(text) {
+  if (!/^\s*(<!doctype html|<html)/i.test(text)) return text;
+  const m = /<title[^>]*>([^<]{1,300})<\/title>/i.exec(text);
+  if (!m) return text;
+  const title = m[1]
+    .replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'").replace(/&amp;/g, '&')
+    .replace(/\s+/g, ' ').trim();
+  return title || text;
 }
 
 async function limitedResponseText(resp, maxLength) {
