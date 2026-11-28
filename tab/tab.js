@@ -320,7 +320,11 @@ async function cancelActiveActivityJobAndWait() {
 function activityDetailRows(job) {
   const isUnsubscribeJob = job.mode !== 'cleanup' && job.mode !== 'keep-cleanup';
   const method = isUnsubscribeJob && job.method ? `${METHOD_LABELS[job.method.type] || job.method.type}: ${job.method.url}` : 'None';
-  const dispose = DISPOSE_LABELS[job.dispose] || job.dispose || 'None';
+  const planned = DISPOSE_LABELS[job.dispose] || job.dispose || 'None';
+  // A job that failed before the cleanup step never touched the emails.
+  const dispose = job.failedStage === 'unsubscribe' && job.dispose && job.dispose !== 'keep'
+    ? `Not done (unsubscribe failed first; planned: ${planned.toLowerCase()})`
+    : job.failedStage === 'cleanup' ? `Failed (planned: ${planned.toLowerCase()})` : planned;
   const mode = job.mode === 'keep-cleanup'
     ? 'Keep subscription'
     : job.mode === 'cleanup' ? 'Cleanup' : 'Unsubscribe';
@@ -1678,13 +1682,23 @@ function methodDetail(method) {
   }
 }
 
+// One-click POSTs must use https (RFC 8058) and the background page refuses
+// anything else, so an http:// List-Unsubscribe link is only offered as a
+// browser link. Scans before this rule stored it as one-click as well.
+// The test inbox's local server is the one http endpoint that may be used.
+const isTestEndpoint = (url) => globalThis.browser?.runtime?.getManifest?.().name === 'ThunderSub Test Inbox' &&
+  url.startsWith('http://127.0.0.1:8765/');
+const isSendableMethod = (method) => method.type !== 'oneclick' ||
+  /^https:\/\//i.test(method.url || '') || isTestEndpoint(method.url || '');
+
 function getBestMethod(sub) {
-  if (sub.unsubscribeMethods?.length) return sub.unsubscribeMethods[0];
+  if (sub.unsubscribeMethods?.length) return sub.unsubscribeMethods.find(isSendableMethod) || null;
 
   const urls = sub.unsubUrls || [];
   const httpUrl = urls.find(u => u.startsWith('http')) || '';
   const mailtoUrl = urls.find(u => u.startsWith('mailto')) || '';
-  const oneClickUrl = sub.oneClickUrls?.[0] || (sub.oneClick ? httpUrl : '');
+  const oneClickUrl = [sub.oneClickUrls?.[0], sub.oneClick ? httpUrl : '']
+    .find(url => url && isSendableMethod({ type: 'oneclick', url }));
   if (oneClickUrl) return { type: 'oneclick', url: oneClickUrl };
   if (mailtoUrl) return { type: 'mail', url: mailtoUrl };
   if (httpUrl) return { type: 'web', url: httpUrl };
@@ -1693,12 +1707,14 @@ function getBestMethod(sub) {
 }
 
 function getAvailableMethods(sub) {
-  if (sub.unsubscribeMethods?.length) return sub.unsubscribeMethods;
+  if (sub.unsubscribeMethods?.length) return sub.unsubscribeMethods.filter(isSendableMethod);
 
   const methods = [];
   const oneClickUrls = sub.oneClickUrls || [];
   const add = (type, url) => {
-    if (url && !methods.some(m => m.type === type && m.url === url)) methods.push({ type, url });
+    if (url && isSendableMethod({ type, url }) && !methods.some(m => m.type === type && m.url === url)) {
+      methods.push({ type, url });
+    }
   };
   for (const url of oneClickUrls) add('oneclick', url);
   for (const url of (sub.unsubUrls || [])) {
@@ -2720,6 +2736,7 @@ async function processActivityJob(job) {
     if (currentFilter === 'error') renderFilteredCards();
     else removeCachedSubscription(sub);
     trace.log('unsubscribe:failed', undefined, { stage: 'unsubscribe' });
+    job.failedStage = 'unsubscribe';
     job.status = 'failed';
     setActivityJobProgress(job, message, 100);
     return;
@@ -2771,6 +2788,7 @@ async function processActivityJob(job) {
       : `Unsubscribed, but ${stage} emails failed: ${e.message || e}. Use Cleanup to retry.`;
     toast(msg, 'error');
     trace.log('unsubscribe:cleanup-failed', undefined, { stage });
+    job.failedStage = 'cleanup';
     job.status = 'failed';
     setActivityJobProgress(job, msg, 100);
     clearProcessingFlag(job);

@@ -106,7 +106,7 @@ test('dry run blocks junk, delete, and move operations', async t => {
   assert.deepEqual(forbiddenCalls, []);
 });
 
-test('one-click requests reject redirects, omit credentials, and limit error responses', async () => {
+test('one-click requests do not follow redirects, omit credentials, and limit error responses', async () => {
   dryRunEnabled = false;
   let fetchOptions;
   globalThis.fetch = async (_url, options) => {
@@ -124,10 +124,43 @@ test('one-click requests reject redirects, omit credentials, and limit error res
       ...baseRequest
     });
 
-    assert.equal(fetchOptions.redirect, 'error');
+    assert.equal(fetchOptions.redirect, 'manual');
     assert.equal(fetchOptions.credentials, 'omit');
     assert.equal(result.message.length, 1000);
     assert.match(result.message, /… \[response truncated\]$/);
+  } finally {
+    dryRunEnabled = true;
+    globalThis.fetch = forbidden('fetch');
+  }
+});
+
+test('one-click redirect is reported as unclear instead of a network error', async () => {
+  dryRunEnabled = false;
+  globalThis.fetch = async () => {
+    const resp = new Response(null, { status: 302, headers: { Location: 'https://example.com/bye' } });
+    return resp;
+  };
+  try {
+    await assert.rejects(
+      handleRuntimeMessage({ command: 'unsubOneClick', url: 'https://example.com/unsubscribe', ...baseRequest }),
+      /redirect instead of a confirmation/
+    );
+  } finally {
+    dryRunEnabled = true;
+    globalThis.fetch = forbidden('fetch');
+  }
+});
+
+test('one-click error pages in HTML are reduced to their title', async () => {
+  dryRunEnabled = false;
+  globalThis.fetch = async () => new Response(
+    '<!DOCTYPE html> <!--[if lt IE 7]> <html class="no-js"> <![endif]--><head><title>shop.example | 526: Invalid SSL certificate &amp; more</title></head><body>…</body></html>',
+    { status: 526, headers: { 'Content-Type': 'text/html' } }
+  );
+  try {
+    const result = await handleRuntimeMessage({ command: 'unsubOneClick', url: 'https://example.com/unsubscribe', ...baseRequest });
+    assert.equal(result.status, 526);
+    assert.equal(result.message, 'shop.example | 526: Invalid SSL certificate & more');
   } finally {
     dryRunEnabled = true;
     globalThis.fetch = forbidden('fetch');
