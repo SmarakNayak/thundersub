@@ -361,10 +361,15 @@ kbd{padding:1px 5px;border:1px solid var(--border);border-bottom-width:2px;borde
 label.modal-addr-row{cursor:pointer}
 label.modal-addr-row:hover{background:rgba(0,0,0,.3)}
 .modal-addr-check{accent-color:var(--accent)}
-.modal-addr{flex:1;font-family:monospace;font-size:12px;color:var(--text)}
+.modal-addr{flex:1;min-width:0;overflow-wrap:anywhere;font-family:monospace;font-size:12px;color:var(--text)}
 .modal-method{font-size:10px;color:var(--muted);font-weight:600;padding:2px 6px;border-radius:6px;background:var(--border);white-space:nowrap}
 .method-select{flex:1;min-width:0}
 .method-help{font-size:11px;color:var(--muted);line-height:1.35;margin:4px 0 0 52px;word-break:break-word}
+.method-help-untracked{color:var(--success);margin-top:4px}
+.method-help-ok{color:var(--success);margin-top:4px}
+.method-help-note{margin-top:4px}
+.method-help-warn{color:var(--warn);margin-top:4px}
+.modal-junk-row{margin-top:6px}
 .modal-addr-box{flex-direction:column;align-items:stretch;gap:6px;padding:8px 10px}
 .modal-kv{display:flex;align-items:center;gap:8px;font-size:13px}
 .modal-kv-label{color:var(--muted);font-size:12px;font-weight:600;min-width:44px}

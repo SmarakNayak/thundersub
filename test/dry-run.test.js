@@ -77,6 +77,30 @@ test('dry run blocks every unsubscribe transport', async t => {
   assert.deepEqual(forbiddenCalls, []);
 });
 
+test('dry run reports the untracked link for browser transports', async t => {
+  const target = 'https://example.com/unsubscribe?token=abc';
+  const wrapped = 'https://eur01.safelinks.protection.outlook.com/?url=' +
+    encodeURIComponent(target + '&utm_source=newsletter') + '&data=05';
+
+  for (const [command, type] of [['unsubWeb', 'browser'], ['unsubEmbedded', 'embedded link']]) {
+    await t.test(command, async () => {
+      const result = await handleRuntimeMessage({ command, url: wrapped, ...baseRequest });
+      assert.deepEqual(result, { ok: true, dryRun: true, type, url: target, originalUrl: wrapped });
+    });
+  }
+
+  await t.test('inspectUnsubLink (dialog preview)', async () => {
+    const result = await handleRuntimeMessage({
+      command: 'inspectUnsubLink', type: 'web', url: wrapped, senderEmail: 'news@example.com', senderName: 'Example'
+    });
+    assert.equal(result.url, target);
+    assert.equal(result.check.relation, 'same');
+    assert.equal(result.check.recommendJunk, false);
+  });
+
+  assert.deepEqual(forbiddenCalls, []);
+});
+
 test('dry run blocks junk, delete, and move operations', async t => {
   await t.test('junkEmails', async () => {
     const result = await handleRuntimeMessage({ command: 'junkEmails', ...baseRequest });
