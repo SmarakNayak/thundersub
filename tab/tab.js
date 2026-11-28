@@ -1660,23 +1660,147 @@ function truncateMiddle(s, max = 64) {
   return `${str.slice(0, max - 16)}…${str.slice(-15)}`;
 }
 
-// Browser methods open the link with click-tracking removed (see
-// untrack-url.js). Show that link below the original once the background
-// page has unwrapped it; ignore answers for a method no longer shown.
-let untrackedDetailToken = 0;
-async function showUntrackedTarget(method) {
-  const token = ++untrackedDetailToken;
-  if (!method || !['web', 'embedded'].includes(method.type)) return;
-  let url;
-  try {
-    ({ url } = await bg('untrackUrl', { url: method.url }));
-  } catch (e) {
+// Below the method: the link that will actually be used (browser methods
+// open it with click-tracking removed, see untrack-url.js) and whether it
+// belongs to the sender (sender-check.js). A foreign link from a sender that
+// looks fake turns the trust hint into a junk recommendation. Answers for a
+// method no longer shown are ignored.
+// Until the answer arrives the hint stays empty; without a usable answer it
+// falls back to the warning, never to the calm text.
+let linkCheckToken = 0;
+async function showLinkCheck(method, sub) {
+  const token = ++linkCheckToken;
+  const trustHint = document.getElementById('modal-trust-hint');
+  trustHint.classList.remove('warn');
+  trustHint.textContent = '';
+  if (!method || !method.url) {
+    showTrustHint(sub, null);
     return;
   }
+  let result = null;
+  try {
+    result = await bg('inspectUnsubLink', {
+      type: method.type,
+      url: method.url,
+      senderEmail: sub.senderEmail,
+      senderName: sub.senderName,
+      senderAuth: sub.senderAuth,
+      recipientAddresses: [sub.recipientAddress, sub.accountIdentityAddress],
+      listUnsubscribe: (sub.unsubUrls || []).length > 0
+    });
+  } catch (e) {
+    result = null;
+  }
+  if (token !== linkCheckToken) return;
   const help = document.getElementById('modal-method-help');
-  if (token !== untrackedDetailToken || !help || !url || url === method.url) return;
-  help.replaceChildren(methodDetail(method),
-    el('div', { class: 'method-help-untracked' }, `Tracking removed – will open: ${url}`));
+  if (!help || !result?.check) {
+    showTrustHint(sub, null);
+    return;
+  }
+  const { url, check } = result;
+  help.replaceChildren(...[methodDetail(method),
+    url && url !== method.url
+      ? el('div', { class: 'method-help-untracked' }, `Tracking removed – will open: ${url}`)
+      : null,
+    insecureLinkLine(check),
+    linkRelationLine(check),
+    senderAuthLine(check, sub),
+    ...junkReasonLines(check, sub)].filter(Boolean));
+  showTrustHint(sub, check);
+}
+
+function insecureLinkLine(check) {
+  if (!check.insecure) return null;
+  return el('div', { class: 'method-help-warn' }, check.addressInLink
+    ? `⚠ Unencrypted http:// link: anyone on the network can read it, including your address ${check.addressInLink}.`
+    : '⚠ Unencrypted http:// link: anyone on the network can see which page it opens and what it carries.');
+}
+
+function linkRelationLine(check) {
+  switch (check.relation) {
+    case 'same':
+      return el('div', { class: 'method-help-ok' }, `✓ The link stays with the sender: ${check.linkDomain}`);
+    case 'service':
+      return el('div', { class: 'method-help-note' },
+        `The link goes to the sending service ${check.service} (${check.linkDomain}); where it ends up is not visible.`);
+    case 'foreign':
+      return el('div', { class: 'method-help-warn' },
+        `⚠ The link goes to ${check.linkDomain}, not to the sender's domain ${check.senderDomain}.`);
+    default:
+      return el('div', { class: 'method-help-warn' }, '⚠ Could not tell where this link goes.');
+  }
+}
+
+function senderAuthLine(check, sub) {
+  if (!sub.senderAuth) {
+    return el('div', { class: 'method-help-warn' }, "⚠ Sender not checked yet: rescan to check the signature.");
+  }
+  // Free mail posing as a company gets its own warning line (junkReasonLines).
+  const freemail = check.freemail && !check.junkReasons.includes('freemail')
+    ? ` It is a free mail account (${check.senderDomain}).` : '';
+  if (check.verified === true) {
+    return el('div', { class: check.freemail ? 'method-help-note' : 'method-help-ok' },
+      `✓ Sender verified: the newest email is signed by ${check.senderDomain}.${freemail}`);
+  }
+  if (check.authStatus === 'fail') {
+    return el('div', { class: 'method-help-warn' },
+      `⚠ Sender not verified: the signature of the newest email failed.${freemail}`);
+  }
+  if (check.authStatus === 'third-party') {
+    const by = check.signers.length ? check.signers.join(', ') : 'another domain';
+    return el('div', { class: 'method-help-warn' },
+      `⚠ Sender not verified: the newest email is only signed by ${by}.${freemail}`);
+  }
+  return el('div', { class: 'method-help-warn' },
+    `⚠ Sender not verified: the newest email carries no signature result.${freemail}`);
+}
+
+// Reasons the lines above do not already state.
+function junkReasonLines(check, sub) {
+  return check.junkReasons.map(reason => {
+    if (reason === 'name') {
+      return el('div', { class: 'method-help-warn' }, `⚠ The name "${sub.senderName}" does not match ${check.senderDomain}.`);
+    }
+    if (reason === 'freemail') {
+      return el('div', { class: 'method-help-warn' },
+        `⚠ Sent as a company from a free mail account (${check.senderDomain}): anyone can open one.`);
+    }
+    return null;
+  });
+}
+
+// Every unsubscribe method confirms to the sender that the address is
+// live. Only a fully confirmed case gets the calm text: a verified sender
+// whose link stays with it or its sending service. Anything unchecked or
+// unclear warns, harder when there's no List-Unsubscribe header, since
+// body-scraped links from unknown senders are the riskiest to follow; spam
+// gets a junk recommendation (the reasons are listed above it).
+function showTrustHint(sub, check) {
+  const trustHint = document.getElementById('modal-trust-hint');
+  const headerBased = (sub.unsubUrls || []).length > 0;
+  if (check?.recommendJunk) {
+    const junkButton = el('button', { type: 'button', class: 'btn btn-muted modal-junk-instead' }, '🔥 Mark as junk instead');
+    junkButton.addEventListener('click', () => {
+      if (modalOperationTraceId) return;
+      const key = modalSubscriptionKey;
+      closeUnsubModal();
+      if (key) doJunk(key);
+    });
+    trustHint.classList.add('warn');
+    trustHint.replaceChildren(
+      '⚠ This looks like spam rather than a newsletter. Unsubscribing would confirm your address to whoever sent it.',
+      el('div', { class: 'modal-junk-row' }, junkButton));
+    return;
+  }
+  if (check?.verified === true && (check.relation === 'same' || check.relation === 'service')) {
+    trustHint.classList.remove('warn');
+    trustHint.textContent = 'Unsubscribing confirms to the sender that your address is active.';
+    return;
+  }
+  trustHint.classList.add('warn');
+  trustHint.textContent = headerBased
+    ? "⚠ Not everything about this sender could be confirmed. Unsubscribing confirms that your address is active. Don't recognise this sender? Mark it as junk (🔥 on the card) instead."
+    : "⚠ This sender doesn't use the standard unsubscribe header — only a link found in the email body. Unsubscribing from untrusted senders is not recommended: it confirms your address is active. If in doubt, mark it as junk (🔥 on the card) instead.";
 }
 
 function methodDetail(method) {
@@ -2226,7 +2350,7 @@ function openUnsubModal(subscriptionKey, isRetry = false) {
               methodOptions)
           : el('span', { class: 'modal-method' }, methodLabel)),
       el('div', { id: 'modal-method-help', class: 'method-help' }, detail)));
-  showUntrackedTarget(method);
+  showLinkCheck(method, sub);
 
   if (isRetry) {
     document.getElementById('modal-method-select').addEventListener('change', (e) => {
@@ -2234,19 +2358,9 @@ function openUnsubModal(subscriptionKey, isRetry = false) {
       const selectedDetail = methodDetail(modalSelectedMethod || method);
       document.getElementById('modal-method-help').textContent = selectedDetail;
       document.getElementById('modal-confirm').title = selectedDetail;
-      showUntrackedTarget(modalSelectedMethod || method);
+      showLinkCheck(modalSelectedMethod || method, sub);
     });
   }
-
-  // Every unsubscribe method confirms to the sender that the address is
-  // live — warn harder when there's no List-Unsubscribe header, since
-  // body-scraped links from unknown senders are the riskiest to follow.
-  const trustHint = document.getElementById('modal-trust-hint');
-  const headerBased = (sub.unsubUrls || []).length > 0;
-  trustHint.classList.toggle('warn', !headerBased);
-  trustHint.textContent = headerBased
-    ? "Unsubscribing confirms to the sender that your address is active. Don't recognise this sender? Mark it as junk (🔥 on the card) instead."
-    : "⚠ This sender doesn't use the standard unsubscribe header — only a link found in the email body. Unsubscribing from untrusted senders is not recommended: it confirms your address is active. If in doubt, mark it as junk (🔥 on the card) instead.";
 
   renderModalSourceFolders(sub);
   document.querySelector('.modal-dispose h4').textContent = 'What to do with existing emails?';

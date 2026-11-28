@@ -10,6 +10,7 @@ import { UNSUB_REGEX, mayContainUnsubWording } from './unsub-detect.js';
 import { buildAddressSkipMatcher } from './scan-scope.js';
 import { oneClickUrlBlockReason, browserUrlBlockReason } from './unsub-url.js';
 import { untrackUrl } from './untrack-url.js';
+import { messageAuthStatus, emptySenderAuth, addSenderAuth, checkUnsubTarget } from './sender-check.js';
 import { junkFolderForGroup } from './junk-routing.js';
 
 // ── State ────────────────────────────────────────────────────────────────────
@@ -1117,7 +1118,8 @@ async function runScan() {
                   methodCandidates: [],
                   detectionCounts: { header: 0, embedded: 0 },
                   detectionEvidence: [],
-                  messageGroups: []
+                  messageGroups: [],
+                  senderAuth: emptySenderAuth()
                 };
               }
 
@@ -1131,6 +1133,8 @@ async function runScan() {
                 s.lastDate = dateStr;
                 s.sampleSubject = m.subject || '';
               }
+              addSenderAuth(s.senderAuth,
+                messageAuthStatus(full.headers['authentication-results'], email), dateStr);
 
               // Preserve candidate dates so the most recently received methods
               // are preferred regardless of folder scan order.
@@ -1266,6 +1270,7 @@ async function runScan() {
         detectionEvidence: s.detectionEvidence,
         _nameFreqs: s._nameFreqs,
         messageGroups: s.messageGroups,
+        senderAuth: s.senderAuth,
         decision,
         dispose: carryPrevState ? prev.dispose : null,
         cleanupDestination: carryPrevState ? prev.cleanupDestination : null,
@@ -1479,6 +1484,19 @@ async function dryRunUnsubscribeInBrowser(type, rawUrl) {
   if (url === rawUrl) return dryRunUnsubscribe(type, url);
   console.log(`[DRY RUN] Would unsubscribe via ${type}: ${url} (tracking removed from ${rawUrl})`);
   return { ok: true, dryRun: true, type, url, originalUrl: rawUrl };
+}
+
+async function inspectUnsubLink({ type, url, senderEmail, senderName, senderAuth, recipientAddresses, listUnsubscribe }) {
+  const rawUrl = String(url || '');
+  const target = type === 'web' || type === 'embedded' ? await untrackUrl(rawUrl) : rawUrl;
+  return {
+    url: target,
+    check: checkUnsubTarget({
+      url: target, senderEmail, senderName, senderAuth,
+      listUnsubscribe: typeof listUnsubscribe === 'boolean' ? listUnsubscribe : undefined,
+      recipientAddresses: Array.isArray(recipientAddresses) ? recipientAddresses : []
+    })
+  };
 }
 
 // ── Delete / Move ────────────────────────────────────────────────────────────
@@ -1935,9 +1953,10 @@ export function handleRuntimeMessage(request, sender) {
     case 'getSubscriptions':
       return getSubscriptions(request.filter);
 
-    case 'untrackUrl':
-      // Lets the unsubscribe dialog show the link that will actually open.
-      return untrackUrl(String(request.url || '')).then(url => ({ url }));
+    case 'inspectUnsubLink':
+      // The link that will be used (untracked for browser methods) and
+      // whether it belongs to the sender (see sender-check.js).
+      return inspectUnsubLink(request);
 
     case 'getDryRun':
       return getDryRun().then(dryRun => ({ dryRun }));

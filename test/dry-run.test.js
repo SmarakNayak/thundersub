@@ -89,8 +89,13 @@ test('dry run reports the untracked link for browser transports', async t => {
     });
   }
 
-  await t.test('untrackUrl (dialog preview)', async () => {
-    assert.deepEqual(await handleRuntimeMessage({ command: 'untrackUrl', url: wrapped }), { url: target });
+  await t.test('inspectUnsubLink (dialog preview)', async () => {
+    const result = await handleRuntimeMessage({
+      command: 'inspectUnsubLink', type: 'web', url: wrapped, senderEmail: 'news@example.com', senderName: 'Example'
+    });
+    assert.equal(result.url, target);
+    assert.equal(result.check.relation, 'same');
+    assert.equal(result.check.recommendJunk, false);
   });
 
   assert.deepEqual(forbiddenCalls, []);
