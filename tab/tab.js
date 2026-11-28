@@ -1660,6 +1660,25 @@ function truncateMiddle(s, max = 64) {
   return `${str.slice(0, max - 16)}…${str.slice(-15)}`;
 }
 
+// Browser methods open the link with click-tracking removed (see
+// untrack-url.js). Show that link below the original once the background
+// page has unwrapped it; ignore answers for a method no longer shown.
+let untrackedDetailToken = 0;
+async function showUntrackedTarget(method) {
+  const token = ++untrackedDetailToken;
+  if (!method || !['web', 'embedded'].includes(method.type)) return;
+  let url;
+  try {
+    ({ url } = await bg('untrackUrl', { url: method.url }));
+  } catch (e) {
+    return;
+  }
+  const help = document.getElementById('modal-method-help');
+  if (token !== untrackedDetailToken || !help || !url || url === method.url) return;
+  help.replaceChildren(methodDetail(method),
+    el('div', { class: 'method-help-untracked' }, `Tracking removed – will open: ${url}`));
+}
+
 function methodDetail(method) {
   if (!method) return 'No unsubscribe method was detected for this sender.';
   switch (method.type) {
@@ -2207,6 +2226,7 @@ function openUnsubModal(subscriptionKey, isRetry = false) {
               methodOptions)
           : el('span', { class: 'modal-method' }, methodLabel)),
       el('div', { id: 'modal-method-help', class: 'method-help' }, detail)));
+  showUntrackedTarget(method);
 
   if (isRetry) {
     document.getElementById('modal-method-select').addEventListener('change', (e) => {
@@ -2214,6 +2234,7 @@ function openUnsubModal(subscriptionKey, isRetry = false) {
       const selectedDetail = methodDetail(modalSelectedMethod || method);
       document.getElementById('modal-method-help').textContent = selectedDetail;
       document.getElementById('modal-confirm').title = selectedDetail;
+      showUntrackedTarget(modalSelectedMethod || method);
     });
   }
 

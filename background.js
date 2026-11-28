@@ -9,6 +9,7 @@
 import { UNSUB_REGEX, mayContainUnsubWording } from './unsub-detect.js';
 import { buildAddressSkipMatcher } from './scan-scope.js';
 import { oneClickUrlBlockReason, browserUrlBlockReason } from './unsub-url.js';
+import { untrackUrl } from './untrack-url.js';
 import { junkFolderForGroup } from './junk-routing.js';
 
 // ── State ────────────────────────────────────────────────────────────────────
@@ -1443,8 +1444,12 @@ async function unsubMail(mailtoUrl, recipientAddress, traceId) {
   return { ok: true, to, sent: true };
 }
 
-async function openUnsubInBrowser(url, phase, traceId) {
+async function openUnsubInBrowser(rawUrl, phase, traceId) {
   const startedAt = Date.now();
+  // Unwrap click-tracking redirectors first, so the safety gate below checks
+  // the destination that will actually be opened.
+  const url = await untrackUrl(rawUrl);
+  if (url !== rawUrl) tracePhase(traceId, `${phase}-untracked`, startedAt);
   const blockReason = browserUrlBlockReason(url);
   if (blockReason) {
     tracePhase(traceId, `${phase}-blocked`, startedAt, { reason: blockReason });
@@ -1466,6 +1471,14 @@ async function unsubEmbedded(url, traceId) {
 function dryRunUnsubscribe(type, url) {
   console.log(`[DRY RUN] Would unsubscribe via ${type}: ${url}`);
   return { ok: true, dryRun: true, type, url };
+}
+
+// Browser methods open the untracked link, so the dry run reports that one.
+async function dryRunUnsubscribeInBrowser(type, rawUrl) {
+  const url = await untrackUrl(rawUrl);
+  if (url === rawUrl) return dryRunUnsubscribe(type, url);
+  console.log(`[DRY RUN] Would unsubscribe via ${type}: ${url} (tracking removed from ${rawUrl})`);
+  return { ok: true, dryRun: true, type, url, originalUrl: rawUrl };
 }
 
 // ── Delete / Move ────────────────────────────────────────────────────────────
@@ -1922,6 +1935,10 @@ export function handleRuntimeMessage(request, sender) {
     case 'getSubscriptions':
       return getSubscriptions(request.filter);
 
+    case 'untrackUrl':
+      // Lets the unsubscribe dialog show the link that will actually open.
+      return untrackUrl(String(request.url || '')).then(url => ({ url }));
+
     case 'getDryRun':
       return getDryRun().then(dryRun => ({ dryRun }));
 
@@ -2005,12 +2022,12 @@ export function handleRuntimeMessage(request, sender) {
 
     case 'unsubWeb':
       return getDryRun().then(dryRun => dryRun
-        ? dryRunUnsubscribe('browser', request.url)
+        ? dryRunUnsubscribeInBrowser('browser', request.url)
         : unsubWeb(request.url, request.traceId));
 
     case 'unsubEmbedded':
       return getDryRun().then(dryRun => dryRun
-        ? dryRunUnsubscribe('embedded link', request.url)
+        ? dryRunUnsubscribeInBrowser('embedded link', request.url)
         : unsubEmbedded(request.url, request.traceId));
 
     case 'openTab':
