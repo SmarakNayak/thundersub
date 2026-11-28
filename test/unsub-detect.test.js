@@ -155,3 +155,41 @@ test('build.sh bundles the background page and modules into the xpi', () => {
     assert.ok(build.includes(f), `${f} missing from build.sh zip list`);
   }
 });
+
+import { looksLikeUnsubHref, isPointerText, findUnsubUrlInText } from '../unsub-detect.js';
+
+test('unsubscribe-looking hrefs, also inside percent-encoded tracking links', () => {
+  assert.equal(looksLikeUnsubHref('https://shop.example/newsletter/abmelden?id=1'), true);
+  assert.equal(looksLikeUnsubHref('https://shop.example/?action=newsletter_unsubscribe&e=x'), true);
+  assert.equal(looksLikeUnsubHref('https://shop.example/account/email-preferences'), true);
+  assert.equal(looksLikeUnsubHref('https://x.awstrack.me/L0/https:%2F%2Fshop.example%2Fopt-out%3Ft=1/1/abc'), true);
+  assert.equal(looksLikeUnsubHref('https://www.shop.example/de/Infos/Hilfe-Support/Anleitungen/Tastatur'), false);
+  assert.equal(looksLikeUnsubHref('http://ec.europa.eu/consumers/odr/'), false);
+  assert.equal(looksLikeUnsubHref('https://shop.example/%E0%A4%A'), false);
+});
+
+test('pointer link texts', () => {
+  for (const text of ['hier', ' Hier. ', 'klicken Sie hier', 'click here', 'Click here!', 'ici', '»hier«']) {
+    assert.equal(isPointerText(text), true, text);
+  }
+  for (const text of ['Hilfe & Support', 'Datenschutz', 'Streitschlichtung', '', 'hier finden Sie unsere AGB']) {
+    assert.equal(isPointerText(text), false, text);
+  }
+});
+
+test('plain text: a URL right after the wording or one that looks like unsubscribing', () => {
+  assert.equal(findUnsubUrlInText('Newsletter abbestellen: https://t.example/u/8f3a\nViele Grüße'),
+    'https://t.example/u/8f3a');
+  assert.equal(findUnsubUrlInText('Hilfe: https://shop.example/help\nZum Abmelden besuchen Sie https://shop.example/abmelden?id=7'),
+    'https://shop.example/abmelden?id=7');
+});
+
+test('plain text: order mails with unsubscribe wording near unrelated links find nothing', () => {
+  const order = 'Anleitung zur Tastatur: https://shop.example/hilfe/tastatur\n' +
+    'Datenschutz: Der Verwendung Ihrer Daten für Werbung können Sie jederzeit widersprechen (Abmeldung per Mail an uns).\n' +
+    'Online-Streitbeilegung der EU-Kommission: http://ec.europa.eu/consumers/odr/';
+  assert.equal(findUnsubUrlInText(order), null);
+  // URL before the wording that does not look like an unsubscribe link.
+  assert.equal(findUnsubUrlInText('Ihre Bestellung: https://shop.example/order/123 – zum Abmelden antworten Sie einfach.'), null);
+  assert.equal(findUnsubUrlInText('keine Wörter, nur https://shop.example/'), null);
+});

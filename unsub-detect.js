@@ -189,3 +189,93 @@ export function mayContainUnsubWording(body) {
     .replace(/&([a-z]+);/gi, (entity, name) => NAMED_ENTITIES[name.toLowerCase()] ?? entity);
   return UNSUB_REGEX.test(decoded);
 }
+
+// ── Links near unsubscribe wording ──────────────────────────────────────────
+//
+// Without a List-Unsubscribe header the link has to come from the body. A
+// link whose own text is unsubscribe wording is taken as is. Near such
+// wording in running text, though, transactional mail holds all kinds of
+// links (order mails mention "Abmeldung" in their privacy notes next to a
+// help page or the EU dispute-resolution link), so a nearby link only counts
+// when it looks like an unsubscribe link itself or merely points ("click
+// here") from the same sentence.
+
+// Words in a URL that mark unsubscribe or mail-settings pages.
+const UNSUB_HREF_REGEX = new RegExp(
+  String.raw`unsub|opt[-_]?out|abmeld|abbestell|austrag|afmeld|d[eé]sabonn|d[eé]sinscri|baja|disiscri|` +
+  String.raw`preferenc|praeferenz|präferenz|subscription|e-?mail[-_]?settings|e-?mail-?einstellungen|` +
+  String.raw`notification|benachrichtigung|mailing[-_]?list`,
+  'i'
+);
+
+function decodeHref(href) {
+  let text = String(href || '');
+  for (let i = 0; i < 2; i++) {
+    try {
+      const next = decodeURIComponent(text);
+      if (next === text) break;
+      text = next;
+    } catch (e) {
+      break;
+    }
+  }
+  return text;
+}
+
+// Also finds the words inside the destination of a click-tracking link that
+// carries it percent-encoded (awstrack.me/L0/https:%2F%2F…%2Funsubscribe…).
+export function looksLikeUnsubHref(href) {
+  const text = decodeHref(href).slice(0, 2000);
+  return UNSUB_HREF_REGEX.test(text) || UNSUB_REGEX.test(text);
+}
+
+// Link texts that only point: "Um sich abzumelden, klicken Sie hier."
+const POINTER_TEXTS = new Set([
+  'here', 'click here', 'this link', 'link',
+  'hier', 'hier klicken', 'klicken sie hier', 'klick hier', 'diesen link',
+  'klik hier', 'deze link', 'ici', 'cliquez ici', 'ce lien',
+  'aquí', 'aqui', 'haga clic aquí', 'haz clic aquí', 'este enlace',
+  'qui', 'clicca qui', 'questo link', 'clique aqui', 'este link',
+  'tutaj', 'kliknij tutaj', 'tu', 'här', 'klicka här', 'her', 'klik her', 'klikk her',
+  'tästä', 'здесь', 'тут'
+]);
+
+export function isPointerText(text) {
+  const normalized = String(text || '').slice(0, 100).toLowerCase()
+    .replace(/[\s ]+/g, ' ')
+    .replace(/^[\s.,:;!?"'«»„“”()[\]>→»›-]+|[\s.,:;!?"'«»„“”()[\]<←«‹-]+$/g, '');
+  return POINTER_TEXTS.has(normalized);
+}
+
+// How far a plain URL may follow the wording ("Abmelden: https://…") when the
+// URL itself says nothing about unsubscribing, and how far any URL may be.
+const FOLLOWING_URL_MAX_GAP = 120;
+const NEARBY_URL_MAX_DISTANCE = 300;
+const TEXT_URL_REGEX = /https?:\/\/[^\s"'<>]{1,1000}/g;
+
+// Plain-text bodies: the closest URL that looks like an unsubscribe link, or
+// one that directly follows the wording.
+export function findUnsubUrlInText(text) {
+  const body = String(text || '');
+  const wordings = [...body.matchAll(new RegExp(UNSUB_REGEX.source, 'giu'))];
+  if (wordings.length === 0) return null;
+  const urls = [...body.matchAll(TEXT_URL_REGEX)];
+
+  let best = null;
+  let bestDistance = NEARBY_URL_MAX_DISTANCE;
+  for (const wording of wordings) {
+    const wordingEnd = wording.index + wording[0].length;
+    for (const url of urls) {
+      const distance = Math.abs(wording.index - url.index);
+      if (distance >= bestDistance) continue;
+      // Same sentence only: "Abmeldung per Mail an uns). Streitbeilegung: http://ec.europa.eu/odr" is not one.
+      const follows = url.index >= wordingEnd && url.index - wordingEnd <= FOLLOWING_URL_MAX_GAP &&
+        !/[.!?)]\s|\n\s*\n/.test(body.slice(wordingEnd, url.index));
+      if (follows || looksLikeUnsubHref(url[0])) {
+        best = url[0];
+        bestDistance = distance;
+      }
+    }
+  }
+  return best;
+}
